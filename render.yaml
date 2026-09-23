@@ -1,0 +1,67 @@
+# Render Blueprint (https://render.com/docs/blueprint-spec)
+#
+# Status: NOT YET DEPLOYED. Items marked ASSUMED must be confirmed on the first deploy
+# (see docs/DEVELOPMENT.md -> "Deploying to Render").
+#
+# Instance plans are intentionally omitted (Render defaults apply); choose plans in the
+# dashboard. Note: preDeployCommand is not available on free instances (ASSUMED) - run
+# migrations manually there.
+
+databases:
+  - name: callcopilot-db
+    databaseName: callcopilot
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: callcopilot-api
+    runtime: python
+    rootDir: backend
+    # Render uses uv when uv.lock is present in the service root (VERIFIED in Render docs).
+    buildCommand: uv sync --frozen --no-dev
+    preDeployCommand: uv run --no-sync alembic upgrade head
+    # --proxy-headers: trust Render's proxy for the client IP (used for rate limiting).
+    startCommand: uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
+    healthCheckPath: /health/ready
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.11
+      - key: APP_ENV
+        value: production
+      - key: LOG_JSON
+        value: "true"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: callcopilot-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_SAMESITE
+        value: strict
+      # The frontend origin, e.g. https://callcopilot-web.onrender.com (required for the
+      # CSRF origin check on /auth/refresh and /auth/logout).
+      - key: CORS_ORIGINS
+        sync: false
+
+  - type: web
+    name: callcopilot-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      # Empty = same-origin /api calls through the rewrite below (keeps cookies first-party).
+      - key: VITE_API_BASE_URL
+        value: ""
+    routes:
+      # Proxy API calls to the API service. Rewrites to a full external URL are supported
+      # (VERIFIED in Render docs); replace the host with the API service's actual URL.
+      - type: rewrite
+        source: /api/*
+        destination: https://callcopilot-api.onrender.com/api/*
+      # SPA fallback
+      - type: rewrite
+        source: /*
+        destination: /index.html
