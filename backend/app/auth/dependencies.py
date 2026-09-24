@@ -35,6 +35,10 @@ class Principal:
     session_id: uuid.UUID
     role: MemberRole
 
+    @property
+    def is_admin(self) -> bool:
+        return self.role in (MemberRole.OWNER, MemberRole.ADMIN)
+
 
 async def get_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),

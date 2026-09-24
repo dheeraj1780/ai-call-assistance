@@ -8,14 +8,17 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+from app.action_items.router import router as action_items_router
 from app.auth.dependencies import CSRF_HEADER
 from app.auth.router import router as auth_router
+from app.calls.router import router as calls_router
 from app.common.config import get_settings
 from app.common.db import check_db_role_safety, dispose_engine, get_engine
 from app.common.errors import error_response, register_exception_handlers
 from app.common.logging import configure_logging
 from app.common.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.common.rate_limit import client_ip
+from app.contacts.router import router as contacts_router
 from app.tenants.router import router as tenants_router
 from app.users.router import router as users_router
 
@@ -62,6 +65,9 @@ def create_app() -> FastAPI:
     api.include_router(auth_router)
     api.include_router(users_router)
     api.include_router(tenants_router)
+    api.include_router(contacts_router)
+    api.include_router(calls_router)
+    api.include_router(action_items_router)
     app.include_router(api)
 
     @app.get("/health", tags=["health"], include_in_schema=False)

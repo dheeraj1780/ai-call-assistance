@@ -49,6 +49,9 @@ class CompanyMember(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         CheckConstraint("role IN ('OWNER', 'ADMIN', 'MEMBER')", name="role_valid"),
         # MVP decision (ADR-004): a user belongs to exactly one company.
         UniqueConstraint("user_id"),
+        # Target for composite FKs that reference a member (owner/assignee/author) so the
+        # referenced user is guaranteed to belong to the same company.
+        UniqueConstraint("company_id", "user_id"),
         # Target for composite (company_id, id) foreign keys from tenant-owned child tables.
         UniqueConstraint("company_id", "id"),
     )

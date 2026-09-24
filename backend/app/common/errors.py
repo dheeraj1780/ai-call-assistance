@@ -78,6 +78,20 @@ class ConflictError(AppError):
     message = "Resource conflict"
 
 
+class InvalidReferenceError(AppError):
+    """A referenced resource (contact, call, member) does not exist in the caller's tenant."""
+
+    status_code = 422
+    code = "invalid_reference"
+    message = "Referenced resource does not exist"
+
+
+class InvalidStateError(AppError):
+    status_code = 409
+    code = "invalid_state"
+    message = "The resource is not in a state that allows this change"
+
+
 class RateLimitedError(AppError):
     status_code = 429
     code = "rate_limited"

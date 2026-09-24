@@ -64,7 +64,10 @@ from app.users.models import User  # noqa: E402
 
 DEFAULT_PASSWORD = "correct-horse-battery"
 CSRF = {"X-CSRF-Protection": "1"}
-TABLES = "audit_logs, refresh_tokens, auth_sessions, company_members, companies, users"
+TABLES = (
+    "timeline_events, action_items, calls, contact_notes, contacts, "
+    "audit_logs, refresh_tokens, auth_sessions, company_members, companies, users"
+)
 
 
 def alembic_config() -> Config:
