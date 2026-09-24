@@ -7,6 +7,8 @@ import { label } from "../lib/crm";
 import { errorMessage } from "../lib/errors";
 import {
   LIVE_STATUSES,
+  TRANSCRIPT_DELAY_S,
+  transcriptHealth,
   NOTE_KINDS,
   TERMINAL_STATUSES,
   liveApi,
@@ -48,6 +50,7 @@ export function LiveCallPage() {
           <Header state={state} connection={connection} busy={busy} run={run} callId={id} />
           {actionError ? <Alert>{errorMessage(actionError)}</Alert> : null}
           <PipelineBanner state={state} />
+          <TranscriptHealth state={state} />
           <nav className="flex gap-1 border-b border-slate-200 lg:hidden" aria-label="Live call sections">
             {(["copilot", "transcript", "agenda", "notes"] as Tab[]).map((t) => (
               <button
@@ -71,7 +74,7 @@ export function LiveCallPage() {
             </div>
             <div className={`${tab === "copilot" || tab === "notes" ? "" : "hidden"} space-y-4 lg:col-span-4 lg:block`}>
               <div className={`${tab === "copilot" ? "" : "hidden"} lg:block`}>
-                <CopilotPanel callId={id} insights={state.insights} onDismiss={(iid) => patch((s) => ({ ...s, insights: s.insights.filter((i) => i.id !== iid) }))} />
+                <CopilotPanel callId={id} processing={state.pipeline.copilot_processing === true} insights={state.insights} onDismiss={(iid) => patch((s) => ({ ...s, insights: s.insights.filter((i) => i.id !== iid) }))} />
               </div>
               <div className={`${tab === "notes" ? "" : "hidden"} lg:block`}>
                 <NotesPanel callId={id} notes={state.notes} patch={patch} />
@@ -141,7 +144,13 @@ function Header({
           className={`text-xs ${connection === "live" ? "text-emerald-700" : "text-amber-700"}`}
           title="Connection between this screen and the server. The phone call does not depend on it."
         >
-          {connection === "live" ? "● Live" : connection === "offline" ? "○ Offline" : "○ Reconnecting…"}
+          {connection === "live"
+            ? "● Live"
+            : connection === "offline"
+              ? "○ Offline"
+              : connection === "connecting"
+                ? "○ Connecting…"
+                : "○ Reconnecting…"}
         </span>
         {call.status === "PLANNED" ? (
           <Button disabled={busy} onClick={() => run(() => liveApi.start(callId))}>
@@ -168,10 +177,49 @@ function Header({
   );
 }
 
+const MEDIA_REASON: Record<string, string> = {
+  recording_status_failed:
+    "Teams did not confirm the recording status, so no call audio is processed (compliance).",
+  media_socket_connect_failed: "The Teams media gateway could not reach the server.",
+};
+
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => setNow(Date.now()), 2000);
+    return () => clearInterval(t);
+  }, [active]);
+  return now;
+}
+
+function TranscriptHealth({ state }: { state: LiveState }) {
+  const now = useNow(state.call.status === "ACTIVE");
+  const health = transcriptHealth(state, now);
+  if (!health) return null;
+  const text = {
+    receiving: "● Receiving transcript",
+    waiting: "○ Listening – the transcript appears when someone speaks",
+    delayed: `○ No transcript for ${TRANSCRIPT_DELAY_S}+ seconds – if people are talking, transcription may be delayed`,
+  }[health];
+  return (
+    <p className={`text-xs ${health === "delayed" ? "text-amber-700" : "text-slate-500"}`} aria-live="polite">
+      {text}
+    </p>
+  );
+}
+
 function PipelineBanner({ state }: { state: LiveState }) {
   const messages: string[] = [];
+  const teams = state.channel === "TEAMS" || state.call.channel === "TEAMS";
+  if (state.pipeline.media === "unavailable")
+    messages.push(
+      `${teams ? "Teams meeting audio" : "Call audio"} is not reaching the copilot. ${
+        MEDIA_REASON[state.pipeline.media_reason ?? ""] ?? ""
+      } The ${teams ? "meeting" : "call"} itself continues.`,
+    );
   if (state.pipeline.stt === "unavailable")
-    messages.push("Live transcription is interrupted. Your phone call continues normally.");
+    messages.push(`Live transcription is interrupted. Your ${teams ? "Teams meeting" : "phone call"} continues normally.`);
   const persistence = state.transcript_persistence ?? state.call.transcript_persistence;
   if (persistence && persistence !== "PERSISTED")
     messages.push(
@@ -290,13 +338,26 @@ const CARD_STYLE: Record<Insight["type"], { icon: string; tone: string; title: s
   KNOWLEDGE_RESULT: { icon: "📚", tone: "border-indigo-200 bg-indigo-50", title: "Company knowledge" },
 };
 
-function CopilotPanel({ callId, insights, onDismiss }: { callId: string; insights: Insight[]; onDismiss: (id: string) => void }) {
+function CopilotPanel({
+  callId,
+  insights,
+  onDismiss,
+  processing = false,
+}: {
+  callId: string;
+  insights: Insight[];
+  onDismiss: (id: string) => void;
+  processing?: boolean;
+}) {
   const [showAll, setShowAll] = useState(false);
   const active = insights.filter((i) => i.status === "ACTIVE");
   const shown = showAll ? visibleInsights(active, 50) : visibleInsights(active);
   return (
     <section aria-label="AI copilot" className="space-y-2">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">AI copilot</h2>
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        AI copilot
+        {processing ? <span className="ml-2 font-normal normal-case text-slate-400">analysing…</span> : null}
+      </h2>
       {shown.length === 0 ? <p className="text-sm text-slate-500">Suggestions will appear here during the call.</p> : null}
       {shown.map((i) => {
         const style = CARD_STYLE[i.type];

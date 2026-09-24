@@ -215,6 +215,7 @@ class GatewayEvent(BaseModel):
     gateway_call_id: str
     state: str | None = None  # ESTABLISHING | ESTABLISHED | TERMINATED | FAILED
     recording_status: str | None = None  # RECORDING_CONFIRMED | RECORDING_FAILED
+    media_status: str | None = None  # AVAILABLE | UNAVAILABLE (API media socket / compliance)
     error_code: str | None = None
 
 
@@ -253,9 +254,24 @@ async def handle_gateway_event(provider_name: str, event: GatewayEvent) -> str:
         return "unknown_call"
     if event.recording_status:
         await _apply_recording_status(route.company_id, event.call_id, event.recording_status)
+    if event.media_status in ("AVAILABLE", "UNAVAILABLE"):
+        from app.live import session as live
+
+        media_state = "available" if event.media_status == "AVAILABLE" else "unavailable"
+        reason = (event.error_code or event.recording_status or "")[:64] or None
+        live.set_media_status(event.call_id, media_state, reason)
+        logger.info(
+            "teams_media_status",
+            extra={"call_id": str(event.call_id), "state": media_state, "reason": reason},
+        )
     state = _GATEWAY_STATES.get(event.state or "")
     if state is None:
         return "recorded"
+    if event.state in ("ESTABLISHED", "TERMINATED", "FAILED"):
+        logger.info(
+            "teams_media_session_event",
+            extra={"call_id": str(event.call_id), "state": event.state, "error": event.error_code},
+        )
     return await telephony.process_event_for_call(
         provider_name,
         route.company_id,

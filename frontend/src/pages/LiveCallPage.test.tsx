@@ -18,7 +18,7 @@ const card = (id: string, type: Insight["type"], priority: Insight["priority"], 
 
 function state(overrides: Partial<LiveState> = {}): LiveState {
   return {
-    epoch: "e", seq: 1, partial: null, simulation_available: true,
+    epoch: "e", seq: 1, partial: null, lastTranscriptAt: null, simulation_available: true,
     pipeline: { session_active: true, stt: "ok", copilot: "ok" },
     call: {
       id: "c1", contact_id: "k1", contact: { id: "k1", name: "Ravi Kumar", organization: null }, user_id: "u1",
@@ -96,5 +96,29 @@ describe("LiveCallPage", () => {
     hook.useLiveCall.mockReturnValue({ state: state(), error: null, connection: "live", reload: vi.fn(), patch: vi.fn() });
     renderWithAuth(<LiveCallPage />, { auth, path: "/calls/:id/live", url: "/calls/c1/live" });
     expect(screen.getByText(/Channel: Phone/)).toBeInTheDocument();
+  });
+
+  it("shows Teams media unavailable with the compliance reason", () => {
+    const s = state();
+    hook.useLiveCall.mockReturnValue({
+      state: { ...s, channel: "TEAMS", pipeline: { ...s.pipeline, media: "unavailable", media_reason: "recording_status_failed" } },
+      error: null, connection: "live", reload: vi.fn(), patch: vi.fn(),
+    });
+    renderWithAuth(<LiveCallPage />, { auth, path: "/calls/:id/live", url: "/calls/c1/live" });
+    expect(screen.getByRole("status")).toHaveTextContent("Teams meeting audio is not reaching the copilot");
+    expect(screen.getByRole("status")).toHaveTextContent("did not confirm the recording status");
+    expect(screen.getByRole("status")).toHaveTextContent("The meeting itself continues");
+  });
+
+  it("shows connecting, copilot processing and transcript receiving states", () => {
+    const s = state();
+    hook.useLiveCall.mockReturnValue({
+      state: { ...s, lastTranscriptAt: Date.now(), pipeline: { ...s.pipeline, copilot_processing: true } },
+      error: null, connection: "connecting", reload: vi.fn(), patch: vi.fn(),
+    });
+    renderWithAuth(<LiveCallPage />, { auth, path: "/calls/:id/live", url: "/calls/c1/live" });
+    expect(screen.getByText("○ Connecting…")).toBeInTheDocument();
+    expect(screen.getByText("analysing…")).toBeInTheDocument();
+    expect(screen.getByText("● Receiving transcript")).toBeInTheDocument();
   });
 });

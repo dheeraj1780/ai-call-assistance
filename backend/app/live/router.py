@@ -124,6 +124,9 @@ async def live_snapshot(
             "session_active": running is not None,
             "stt": "ok" if running is None or running.stt_ok else "unavailable",
             "copilot": "degraded" if running is not None and running.engine.degraded else "ok",
+            "media": (live.media_status(call.id) or {}).get("state") or "unknown",
+            "media_reason": (live.media_status(call.id) or {}).get("reason"),
+            "copilot_processing": running is not None and running.engine.processing,
         },
         "simulation_available": settings.simulation_enabled
         and not settings.is_production

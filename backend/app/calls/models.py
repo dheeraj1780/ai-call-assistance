@@ -117,6 +117,10 @@ class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
         CheckConstraint(
             "channel <> 'TEAMS' OR meeting_url IS NOT NULL", name="teams_requires_meeting_url"
         ),
+        CheckConstraint(
+            "language IS NULL OR language IN ('en-IN', 'en-US', 'hi-IN', 'de-DE')",
+            name="language_valid",
+        ),
         UniqueConstraint("company_id", "id"),
         ForeignKeyConstraint(
             ["company_id", "contact_id"],
@@ -165,6 +169,8 @@ class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     )
     # Teams meeting join link the copilot bot joins (TEAMS channel only).
     meeting_url: Mapped[str | None] = mapped_column(String(2000))
+    # Speech recognition language for this call (explicit; no automatic detection).
+    language: Mapped[str | None] = mapped_column(String(8))
     transcript_persistence: Mapped[str] = mapped_column(
         String(32),
         nullable=False,

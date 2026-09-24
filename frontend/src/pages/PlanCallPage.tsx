@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 
-import { Card, PageHeader, QueryState, TextArea } from "../components/common";
+import { Card, PageHeader, QueryState, SelectField, TextArea } from "../components/common";
 import { Alert, Button, TextField } from "../components/ui";
 import { crm, localInputToIso } from "../lib/crm";
 import { errorMessage } from "../lib/errors";
@@ -19,6 +19,7 @@ export function PlanCallPage() {
   const [params] = useSearchParams();
   const teams = params.get("channel") === "TEAMS";
   const [meetingUrl, setMeetingUrl] = useState("");
+  const [language, setLanguage] = useState<"en-IN" | "en-US" | "hi-IN" | "de-DE">("en-IN");
   const create = useMutation({
     mutationFn: () =>
       crm.createCall({
@@ -26,6 +27,7 @@ export function PlanCallPage() {
         objective: objective.trim() || undefined,
         desired_outcome: desired.trim() || undefined,
         scheduled_at: localInputToIso(when),
+        language,
         ...(teams ? { channel: "TEAMS" as const, meeting_url: meetingUrl.trim() } : {}),
       }),
     onSuccess: (call) => {
@@ -70,6 +72,17 @@ export function PlanCallPage() {
                 onChange={(e) => setMeetingUrl(e.target.value)}
               />
             ) : null}
+            <SelectField
+              label="Conversation language (live transcription)"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value as typeof language)}
+              options={[
+                { value: "en-IN", label: "English (India)" },
+                { value: "en-US", label: "English (US)" },
+                { value: "hi-IN", label: "Hindi (India)" },
+                { value: "de-DE", label: "German" },
+              ]}
+            />
             <TextField label="Scheduled for (optional)" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
             <Button type="submit" disabled={create.isPending}>
               {create.isPending ? "Saving…" : "Continue to agenda"}

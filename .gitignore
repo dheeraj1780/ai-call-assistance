@@ -26,3 +26,13 @@ coverage/
 Thumbs.db
 .idea/
 .vscode/
+
+# .NET (teams-media-gateway)
+bin/
+obj/
+TestResults/
+
+# Cloud credentials must never be committed (use GOOGLE_APPLICATION_CREDENTIALS pointing outside the repo)
+*service-account*.json
+*-credentials.json
+gcp-key*.json

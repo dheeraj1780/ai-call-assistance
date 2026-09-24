@@ -147,6 +147,7 @@ export interface Call {
   channel?: "PHONE" | "TEAMS";
   meeting_url?: string | null;
   transcript_persistence?: "PERSISTED" | "TRANSIENT" | "PENDING_RECORDING_STATUS";
+  language?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -221,6 +222,7 @@ export const crm = {
     scheduled_at?: string;
     channel?: "PHONE" | "TEAMS";
     meeting_url?: string;
+    language?: "en-IN" | "en-US" | "hi-IN" | "de-DE";
   }) => apiFetch<Call>("/api/v1/calls", { method: "POST", body }),
   updateCall: (id: string, body: Partial<Call>) =>
     apiFetch<Call>(`/api/v1/calls/${id}`, { method: "PATCH", body }),

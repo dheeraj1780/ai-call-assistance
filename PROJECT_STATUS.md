@@ -1,6 +1,6 @@
 # PROJECT STATUS — AI Calling Copilot (MSME)
 
-_Last updated: 2026-09-25. This file is the hand-off point for any future session._
+_Last updated: 2026-09-25 (Teams call copilot + Google STT)._ This file is the hand-off point for any future session._
 
 - **Current branch:** `phase-2-crm` (local only, **not pushed**; all MVP phases live here)
 - **`main`:** Phase 1 (`d2815f9`, pushed) + staging deploy config (`c0903f6`, **not pushed**)
@@ -8,6 +8,23 @@ _Last updated: 2026-09-25. This file is the hand-off point for any future sessio
 - **Deployment:** **NOT DEPLOYED** (intentionally deferred; see `docs/DEVELOPMENT.md`)
 - **Next step:** controlled real-provider tests, one provider at a time, with the user's
   credentials (see `docs/integrations/testing.md`); then a deployment/Render verification phase.
+
+## Teams real-time call copilot — primary POC (2026-09-25)
+
+Plivo is intentionally paused (adapter unchanged). Details: `docs/integrations/teams-call-copilot.md`,
+`docs/integrations/google-stt.md`, `teams-media-gateway/README.md`.
+
+| Item | Status |
+|---|---|
+| Google Cloud STT v2 adapter (Chirp 3, streaming, interim/final, explicit language en-IN/en-US/hi-IN/de-DE, rotation, reconnect, bounded buffering, shutdown) | IMPLEMENTED · 28 unit tests (fake transport) · real Google NOT VERIFIED |
+| Per-call recognition language (migration `0009_call_language`) | IMPLEMENTED |
+| Synthetic end-to-end (synthetic PCM → Google adapter → copilot → live events) | TESTED (development test, not a Teams call) |
+| `teams-media-gateway` (.NET 8, media SDK 1.2.0.17950) | COMPILES (warnings as errors) · 33 tests pass · runs locally in degraded mode |
+| Gateway media platform | starts only on the Azure Windows VM with real cert/IP; locally the SDK reports `Media platform failed to initialize` |
+| Live screen: connecting / receiving / delayed / STT unavailable / Teams media unavailable / copilot analysing | IMPLEMENTED · frontend tests |
+| Real Teams meeting | **NOT TESTED** — see the readiness checklist |
+
+**Deadline:** the media SDK must be upgraded by ~2026-10 (Microsoft's 3-month freshness rule).
 
 ## Multi-channel integrations (2026-09-25)
 

@@ -5,7 +5,7 @@ There are two independent capabilities:
 | Capability | Status |
 |---|---|
 | Messages (Teams chats via Microsoft Graph) | IMPLEMENTED · MOCK VERIFIED · CREDENTIAL REQUIRED · EXTERNAL PROVIDER VERIFICATION REQUIRED |
-| Real-time Call Copilot (Teams meetings) | Backend contract, mock gateway and UI: IMPLEMENTED · MOCK VERIFIED. The .NET media gateway is **source only: NOT BUILT, NOT VERIFIED**. It cannot be enabled in LIVE mode until a real-time STT provider exists (see below) |
+| Real-time Call Copilot (Teams meetings) | IMPLEMENTED. The .NET gateway **compiles, passes 33 tests and runs locally in degraded mode**. Google STT adapter implemented. **A real Teams meeting is NOT TESTED.** See [teams-call-copilot.md](teams-call-copilot.md) for status and the readiness checklist |
 
 ## 1. Messaging
 
@@ -67,7 +67,7 @@ There are two independent capabilities:
 - A Windows Server VM with an instance-level public IP, a DNS name and a TLS certificate.
 - The gateway deployed on it.
 - `TEAMS_MEDIA_GATEWAY_URL` and `TEAMS_MEDIA_GATEWAY_SECRET` set on the API.
-- **A real streaming speech-to-text provider.** The mock STT cannot transcribe audio. Until one is added, Real-time Call Copilot shows NOT_CONFIGURED in LIVE mode with that reason.
+- **A real streaming speech-to-text provider:** Google Cloud Speech-to-Text (`STT_PROVIDER=google`, see [google-stt.md](google-stt.md)). While `STT_PROVIDER=mock`, Real-time Call Copilot shows NOT_CONFIGURED in LIVE mode.
 
 ## Required credentials
 

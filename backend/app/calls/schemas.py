@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, model_validator
@@ -22,6 +23,8 @@ class CallCreate(BaseModel):
     channel: CallChannel = CallChannel.PHONE
     # Teams meeting join link (required for channel TEAMS).
     meeting_url: str | None = None
+    # Recognition language; defaults to the server's STT_LANGUAGE.
+    language: Literal["en-IN", "en-US", "hi-IN", "de-DE"] | None = None
 
     @model_validator(mode="after")
     def _meeting(self) -> "CallCreate":
@@ -79,5 +82,6 @@ class CallOut(APIModel):
     channel: CallChannel = CallChannel.PHONE
     meeting_url: str | None = None
     transcript_persistence: str = "PERSISTED"
+    language: str | None = None
     created_at: datetime
     updated_at: datetime

@@ -62,6 +62,8 @@ class LiveSession:
     persist: bool = True
     encoding: str = "mulaw"
     sample_rate: int = 8000
+    language: str = "en-IN"
+    opened_at: float = field(default_factory=time.monotonic)
     next_seq: int = 1
     closed: bool = False
     stt_ok: bool = True
@@ -108,6 +110,7 @@ class LiveSession:
                 persist=persist,
                 encoding=encoding,
                 sample_rate=sample_rate,
+                language=call.language or get_settings().stt_language,
                 next_seq=(max_seq or 0) + 1,
             )
 
@@ -135,7 +138,7 @@ class LiveSession:
             return None
         try:
             ts.stream = await get_stt_provider().open_stream(
-                language=get_settings().stt_language,
+                language=self.language,
                 sample_rate=self.sample_rate,
                 encoding=self.encoding,
             )
@@ -220,6 +223,17 @@ class LiveSession:
         if self.closed:
             return
         self.closed = True
+        logger.info(
+            "live_session_closed",
+            extra={
+                "call_id": str(self.call_id),
+                "seconds": round(time.monotonic() - self.opened_at, 1),
+                "audio_frames_received": self.frames_received,
+                "final_segments": self.next_seq - 1,
+                "persisted": self.persist,
+                "stt_ok": self.stt_ok,
+            },
+        )
         for ts in self.tracks.values():
             if ts.stream is not None:
                 with contextlib.suppress(Exception):
@@ -245,6 +259,22 @@ def segment_payload(s: TranscriptSegment) -> dict[str, object]:
         "source": s.source,
         "is_final": True,
     }
+
+
+# ---- Media status (Teams gateway / provider stream), shown on the live screen ------------------
+
+_media_status: dict[uuid.UUID, dict[str, str | None]] = {}
+
+
+def set_media_status(call_id: uuid.UUID, state: str, reason: str | None = None) -> None:
+    """``state``: "available" | "unavailable". Published to the live screen and kept for the
+    snapshot. Unavailable media never ends the call."""
+    _media_status[call_id] = {"state": state, "reason": reason}
+    hub.publish(call_id, "media.status", {"state": state, "reason": reason})
+
+
+def media_status(call_id: uuid.UUID) -> dict[str, str | None] | None:
+    return _media_status.get(call_id)
 
 
 # ---- Registry ---------------------------------------------------------------------------------

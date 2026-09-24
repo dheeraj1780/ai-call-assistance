@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <!--
     Teams real-time media gateway for CallCopilot.
-    STATUS: SOURCE ONLY - NOT BUILT, NOT RUN. No .NET SDK was available where this was written.
+    STATUS: builds with the .NET 8 SDK (see README). Real Teams media has not been exercised.
     Microsoft's application-hosted media library runs only on Windows (x64) and must be kept
     current (Microsoft requires a Microsoft.Graph.Communications.Calls.Media version that is the
     newest or not older than ~3 months). Pin exact versions when you first build.
@@ -13,16 +13,27 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>CallCopilot.TeamsMediaGateway</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Floating versions on purpose until the first real build pins them (see README). -->
-    <PackageReference Include="Microsoft.Graph.Communications.Calls.Media" Version="1.*" />
-    <PackageReference Include="Microsoft.Graph.Communications.Calls" Version="1.*" />
-    <PackageReference Include="Microsoft.Graph.Communications.Client" Version="1.*" />
-    <PackageReference Include="Microsoft.Graph.Communications.Common" Version="1.*" />
-    <PackageReference Include="Microsoft.Identity.Client" Version="4.*" />
-    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.*" />
-    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.*" />
+    <Compile Remove="tests/**" />
+    <Content Remove="tests/**" />
+    <None Remove="tests/**" />
+    <InternalsVisibleTo Include="TeamsMediaGateway.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Pinned to 1.2.0.17950 (published 2026-07-02). Microsoft requires a media library that is the
+      newest or not older than ~3 months, so this must be upgraded by ~2026-10. The newer
+      1.2.0.18725 (2026-09-03) cannot be restored from nuget.org: it depends on
+      Bond.Core.NET, Microsoft.Identity.ServerAuthorization and Microsoft.Skype.Bots.Media.Library,
+      which are not published there (checked 2026-09-25).
+    -->
+    <PackageReference Include="Microsoft.Graph.Communications.Calls.Media" Version="1.2.0.17950" />
+    <PackageReference Include="Microsoft.Graph.Communications.Calls" Version="1.2.0.17950" />
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.83.1" />
   </ItemGroup>
 </Project>

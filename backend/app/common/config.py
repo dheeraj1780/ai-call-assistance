@@ -109,7 +109,8 @@ class Settings(BaseSettings):
     # Fallback calling provider for PHONE calls when a company has no enabled Plivo
     # integration: "mock" (development/demo) or "none" (phone calls require an integration).
     telephony_provider: Literal["mock", "none"] = "mock"
-    stt_provider: Literal["mock"] = "mock"
+    # Speech-to-text: "mock" (offline, reads frames as text) or "google" (Cloud STT v2 streaming).
+    stt_provider: Literal["mock", "google"] = "mock"
     # HMAC secret for telephony webhooks / media-stream tokens. Required in production.
     telephony_webhook_secret: SecretStr | None = None
     # Public base URL of this API (used to build provider callback URLs).
@@ -128,7 +129,24 @@ class Settings(BaseSettings):
     # Explicit override; by default the threshold depends on the embedding provider because
     # similarity scales differ (see knowledge_score_threshold).
     knowledge_min_score: float | None = Field(default=None, ge=0, le=1)
-    stt_language: str = "en-IN"
+    # Default recognition language for calls (a call may choose another supported language).
+    stt_language: Literal["en-IN", "en-US", "hi-IN", "de-DE"] = "en-IN"
+    # Google Cloud Speech-to-Text v2 (see docs/integrations/google-stt.md). Credentials come from
+    # Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS=<service-account.json> or a
+    # workload identity) - never from this file.
+    google_cloud_project: str | None = None
+    # Chirp 3 streaming is GA in the "us" and "eu" multi-regions.
+    google_stt_location: str = Field(default="us", pattern=r"^[a-z0-9-]{2,32}$")
+    google_stt_model: str = Field(default="chirp_3", pattern=r"^[a-z0-9_]{2,40}$")
+    # Audio is aggregated into chunks of this length before sending (quota: 3,000 requests/min
+    # per project across all streams; each request <= 25 KB).
+    stt_chunk_ms: int = Field(default=250, ge=20, le=1000)
+    # Bounded per-stream audio buffer while the provider is slow/reconnecting (oldest dropped).
+    stt_audio_queue_chunks: int = Field(default=120, ge=4, le=2000)
+    # Streams are rotated before the provider's 5-minute limit.
+    stt_stream_max_seconds: int = Field(default=280, ge=30, le=295)
+    stt_connect_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    stt_max_reconnects: int = Field(default=3, ge=0, le=10)
     # Mock-telephony conversation simulator (demo/testing). Only works with TELEPHONY_PROVIDER=mock.
     simulation_enabled: bool = True
     simulation_utterance_delay_seconds: float = Field(default=2.0, ge=0, le=30)
@@ -211,6 +229,8 @@ class Settings(BaseSettings):
             not self.google_client_id or self.google_client_secret is None
         ):
             raise ValueError("CALENDAR_PROVIDER=google requires GOOGLE_CLIENT_ID/SECRET")
+        if self.stt_provider == "google" and not self.google_cloud_project:
+            raise ValueError("STT_PROVIDER=google requires GOOGLE_CLOUD_PROJECT")
         if self.embedding_provider == "voyage" and self.voyage_api_key is None:
             raise ValueError("EMBEDDING_PROVIDER=voyage requires VOYAGE_API_KEY")
         if self.is_production:

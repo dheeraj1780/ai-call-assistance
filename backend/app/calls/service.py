@@ -67,6 +67,7 @@ async def create_call(
         status=CallStatus.PLANNED.value,
         channel=data.channel.value,
         meeting_url=data.meeting_url.strip() if data.meeting_url else None,
+        language=data.language,
     )
     session.add(call)
     await session.flush()

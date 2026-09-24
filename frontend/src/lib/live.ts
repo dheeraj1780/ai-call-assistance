@@ -73,7 +73,15 @@ export interface LiveSnapshot {
   transcript: Segment[];
   insights: Insight[];
   notes: CallNote[];
-  pipeline: { session_active: boolean; stt: "ok" | "unavailable"; copilot: "ok" | "degraded" };
+  pipeline: {
+    session_active: boolean;
+    stt: "ok" | "unavailable";
+    copilot: "ok" | "degraded";
+    /** Call audio reaching the API (Teams media gateway / provider stream). */
+    media?: "available" | "unavailable" | "unknown";
+    media_reason?: string | null;
+    copilot_processing?: boolean;
+  };
   simulation_available: boolean;
   channel?: "PHONE" | "TEAMS";
   transcript_persistence?: "PERSISTED" | "TRANSIENT" | "PENDING_RECORDING_STATUS";
@@ -81,6 +89,8 @@ export interface LiveSnapshot {
 
 export interface LiveState extends LiveSnapshot {
   partial: { speaker: string; text: string } | null;
+  /** Browser time (ms) of the last transcript event, to show "receiving" vs "delayed". */
+  lastTranscriptAt: number | null;
 }
 
 export interface LiveMessage {
@@ -91,7 +101,7 @@ export interface LiveMessage {
 }
 
 export function fromSnapshot(s: LiveSnapshot): LiveState {
-  return { ...s, partial: null };
+  return { ...s, partial: null, lastTranscriptAt: null };
 }
 
 /** Apply one server event. Unknown or stale (seq <= current) events are ignored. */
@@ -111,11 +121,16 @@ export function applyEvent(state: LiveState, msg: LiveMessage): LiveState {
         },
       };
     case "transcript.partial":
-      return { ...next, partial: { speaker: String(d.speaker), text: String(d.text) } };
+      return { ...next, lastTranscriptAt: Date.now(), partial: { speaker: String(d.speaker), text: String(d.text) } };
     case "transcript.final": {
       const seg = d as unknown as Segment;
       if (next.transcript.some((s) => s.id === seg.id)) return next;
-      return { ...next, partial: null, transcript: [...next.transcript, seg].sort((a, b) => a.seq - b.seq) };
+      return {
+        ...next,
+        lastTranscriptAt: Date.now(),
+        partial: null,
+        transcript: [...next.transcript, seg].sort((a, b) => a.seq - b.seq),
+      };
     }
     case "agenda.updated":
       return {
@@ -149,6 +164,17 @@ export function applyEvent(state: LiveState, msg: LiveMessage): LiveState {
       return { ...next, pipeline: { ...next.pipeline, stt: d.state === "ok" ? "ok" : "unavailable" } };
     case "copilot.status":
       return { ...next, pipeline: { ...next.pipeline, copilot: d.state === "ok" ? "ok" : "degraded" } };
+    case "media.status":
+      return {
+        ...next,
+        pipeline: {
+          ...next.pipeline,
+          media: d.state === "available" ? "available" : "unavailable",
+          media_reason: (d.reason as string | null | undefined) ?? null,
+        },
+      };
+    case "copilot.processing":
+      return { ...next, pipeline: { ...next.pipeline, copilot_processing: d.state === "started" } };
     default:
       return next;
   }
@@ -166,6 +192,17 @@ export function visibleInsights(insights: Insight[], limit = 3): Insight[] {
       return (b.created_at ?? "").localeCompare(a.created_at ?? "");
     })
     .slice(0, limit);
+}
+
+/** Seconds of silence from the transcript after which we say it may be delayed. */
+export const TRANSCRIPT_DELAY_S = 20;
+
+/** Live transcription health: receiving / waiting / delayed (never implies the call dropped). */
+export function transcriptHealth(state: LiveState, now: number): "receiving" | "waiting" | "delayed" | null {
+  if (state.call.status !== "ACTIVE" || state.pipeline.stt === "unavailable" || state.pipeline.media === "unavailable") return null;
+  if (state.lastTranscriptAt === null) return "waiting";
+  const age = (now - state.lastTranscriptAt) / 1000;
+  return age < TRANSCRIPT_DELAY_S ? "receiving" : "delayed";
 }
 
 export const LIVE_STATUSES = new Set(["INITIATED", "RINGING", "CONNECTED", "ACTIVE"]);

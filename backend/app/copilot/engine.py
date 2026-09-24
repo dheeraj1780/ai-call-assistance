@@ -166,6 +166,7 @@ class CopilotEngine:
     last_question_at: float = 0.0
     known_notes: list[str] = field(default_factory=list)
     persist: bool = True
+    processing: bool = False
     _transient_keys: set[str] = field(default_factory=set)
 
     @classmethod
@@ -499,6 +500,9 @@ class CopilotEngine:
                 ),
             ]
         )
+        started = time.monotonic()
+        self.processing = True
+        hub.publish(self.call_id, "copilot.processing", {"state": "started"})
         try:
             result = await get_ai_gateway().run(
                 company_id=self.company_id,
@@ -517,6 +521,14 @@ class CopilotEngine:
             logger.exception("copilot_llm_crashed")
             self._set_degraded("ai_error")
             return
+        finally:
+            self.processing = False
+            latency = int((time.monotonic() - started) * 1000)
+            hub.publish(self.call_id, "copilot.processing", {"state": "done", "ms": latency})
+            logger.info(
+                "copilot_llm_pass",
+                extra={"call_id": str(self.call_id), "ms": latency, "segments": len(window)},
+            )
         if self.degraded:
             self.degraded = False
             hub.publish(self.call_id, "copilot.status", {"state": "ok"})

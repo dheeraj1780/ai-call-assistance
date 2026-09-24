@@ -204,7 +204,9 @@ async def run_teams_call(
 
     n = 0
 
-    async def gw(state: str | None = None, recording: str | None = None) -> None:
+    async def gw(
+        state: str | None = None, recording: str | None = None, media: str | None = None
+    ) -> None:
         nonlocal n
         n += 1
         await handle_gateway_event(
@@ -215,6 +217,7 @@ async def run_teams_call(
                 gateway_call_id=gateway_call_id,
                 state=state,
                 recording_status=recording,
+                media_status=media,
             ),
         )
 
@@ -225,6 +228,7 @@ async def run_teams_call(
             # The real gateway calls updateRecordingStatus and only then streams audio.
             await gw(recording="RECORDING_CONFIRMED")
         await gw("ESTABLISHED")
+        await gw(media="AVAILABLE")  # the real gateway reports this once its media socket is up
         ingest = MediaIngest(call_id)
         await ingest.handle(
             parse_json_media_message(

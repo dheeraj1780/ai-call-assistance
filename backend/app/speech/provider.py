@@ -16,9 +16,36 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Protocol
 
+SUPPORTED_LANGUAGES = ("en-IN", "en-US", "hi-IN", "de-DE")
+
 
 class STTError(Exception):
-    pass
+    """Provider-neutral STT failure. ``code`` is safe to log and show."""
+
+    code = "stt_error"
+    retryable = False
+
+
+class STTUnavailableError(STTError):
+    code = "stt_unavailable"
+    retryable = True
+
+
+class STTTimeoutError(STTError):
+    code = "stt_timeout"
+    retryable = True
+
+
+class STTAuthError(STTError):
+    """Credentials missing/invalid or permission denied: retrying will not help."""
+
+    code = "stt_auth_failed"
+
+
+class STTConfigError(STTError):
+    """The provider rejected the session configuration (language/model/encoding)."""
+
+    code = "stt_invalid_config"
 
 
 @dataclass(frozen=True)
@@ -106,7 +133,14 @@ _provider: SpeechToTextProvider | None = None
 def get_stt_provider() -> SpeechToTextProvider:
     global _provider
     if _provider is None:
-        _provider = MockSpeechToTextProvider()
+        from app.common.config import get_settings
+
+        if get_settings().stt_provider == "google":
+            from app.speech.google import GoogleSpeechToTextProvider
+
+            _provider = GoogleSpeechToTextProvider(get_settings())
+        else:
+            _provider = MockSpeechToTextProvider()
     return _provider
 
 
