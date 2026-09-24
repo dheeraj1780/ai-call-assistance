@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router";
 
 import { ActionItemList, AddActionItemForm } from "../components/ActionItemList";
+import { ScheduleEventForm } from "../components/ScheduleEventForm";
 import { Badge, Card, QueryState, SelectField, TextArea } from "../components/common";
 import { Alert, Button } from "../components/ui";
 import { CALL_OUTCOMES, crm, formatDateTime, formatDuration, label, type Call, type CallStatus } from "../lib/crm";
@@ -95,6 +96,16 @@ export function CallDetailPage() {
           </Card>
 
           {call.data.status === "COMPLETED" ? <OutcomeCard call={call.data} onSave={(b) => update.mutate(b)} saving={update.isPending} /> : null}
+
+          {call.data.status === "COMPLETED" || call.data.status === "NO_ANSWER" ? (
+            <Card title="Schedule follow-up (Google Calendar)">
+              <ScheduleEventForm
+                defaultTitle={`Follow-up with ${call.data.contact.name}`}
+                contactId={call.data.contact.id}
+                callId={id}
+              />
+            </Card>
+          ) : null}
 
           <Card title="Action items">
             <div className="space-y-3">

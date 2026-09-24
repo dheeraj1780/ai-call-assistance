@@ -13,6 +13,7 @@ from app.action_items.router import router as action_items_router
 from app.agendas.router import router as agendas_router
 from app.auth.dependencies import CSRF_HEADER
 from app.auth.router import router as auth_router
+from app.calendar.router import router as calendar_router
 from app.calls.router import router as calls_router
 from app.common.config import get_settings
 from app.common.db import check_db_role_safety, dispose_engine, get_engine
@@ -81,6 +82,7 @@ def create_app() -> FastAPI:
     api.include_router(calls_router)
     api.include_router(action_items_router)
     api.include_router(agendas_router)
+    api.include_router(calendar_router)
     app.include_router(api)
 
     @app.get("/health", tags=["health"], include_in_schema=False)

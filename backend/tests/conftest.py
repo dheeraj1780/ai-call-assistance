@@ -68,7 +68,7 @@ from app.users.models import User  # noqa: E402
 DEFAULT_PASSWORD = "correct-horse-battery"
 CSRF = {"X-CSRF-Protection": "1"}
 TABLES = (
-    "jobs, ai_usage_records, agenda_items, "
+    "calendar_events, calendar_connections, jobs, ai_usage_records, agenda_items, "
     "timeline_events, action_items, calls, contact_notes, contacts, "
     "audit_logs, refresh_tokens, auth_sessions, company_members, companies, users"
 )

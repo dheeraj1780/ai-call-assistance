@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router";
 import { RedirectIfAuthenticated, RequireAuth } from "./auth/RequireAuth";
 import { AppLayout } from "./components/AppLayout";
 import { ActionItemsPage } from "./pages/ActionItemsPage";
+import { CalendarPage } from "./pages/CalendarPage";
 import { CallDetailPage } from "./pages/CallDetailPage";
 import { CallPrepPage } from "./pages/CallPrepPage";
 import { ContactDetailPage } from "./pages/ContactDetailPage";
@@ -48,6 +49,7 @@ export function App() {
         <Route path="calls/:id" element={<CallDetailPage />} />
         <Route path="calls/:id/prepare" element={<CallPrepPage />} />
         <Route path="action-items" element={<ActionItemsPage />} />
+        <Route path="calendar" element={<CalendarPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

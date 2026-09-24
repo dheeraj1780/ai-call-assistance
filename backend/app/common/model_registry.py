@@ -5,6 +5,7 @@ from app.agendas.models import AgendaItem
 from app.ai.models import AIUsageRecord
 from app.audit.models import AuditLog
 from app.auth.models import AuthSession, RefreshToken
+from app.calendar.models import CalendarConnection, CalendarEvent
 from app.calls.models import Call
 from app.common.models import Base
 from app.contacts.models import Contact, ContactNote
@@ -20,6 +21,8 @@ __all__ = [
     "AuditLog",
     "AuthSession",
     "Base",
+    "CalendarConnection",
+    "CalendarEvent",
     "Call",
     "Company",
     "CompanyMember",

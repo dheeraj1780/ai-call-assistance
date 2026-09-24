@@ -50,6 +50,10 @@ class AppError(Exception):
         self.headers = headers
         super().__init__(self.message)
 
+    def with_status(self, status_code: int) -> "AppError":
+        self.status_code = status_code
+        return self
+
 
 class UnauthorizedError(AppError):
     status_code = 401

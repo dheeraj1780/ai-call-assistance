@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     # Public base URL of this API (used to build provider callback URLs).
     public_base_url: str = "http://localhost:8000"
 
+    calendar_provider: Literal["mock", "google"] = "mock"
+    # Where the browser is sent after the Google OAuth callback.
+    frontend_base_url: str = "http://localhost:5173"
     google_client_id: str | None = None
     google_client_secret: SecretStr | None = None
     # Key for encrypting OAuth refresh tokens at rest (Fernet-style urlsafe base64, 32 bytes).
@@ -150,6 +153,10 @@ class Settings(BaseSettings):
                 raise ValueError("Wildcard CORS origins are not allowed in production")
         if self.ai_provider == "anthropic" and self.anthropic_api_key is None:
             raise ValueError("AI_PROVIDER=anthropic requires ANTHROPIC_API_KEY")
+        if self.calendar_provider == "google" and (
+            not self.google_client_id or self.google_client_secret is None
+        ):
+            raise ValueError("CALENDAR_PROVIDER=google requires GOOGLE_CLIENT_ID/SECRET")
         if self.embedding_provider == "voyage" and self.voyage_api_key is None:
             raise ValueError("EMBEDDING_PROVIDER=voyage requires VOYAGE_API_KEY")
         if self.is_production:
@@ -160,6 +167,7 @@ class Settings(BaseSettings):
                     ("EMBEDDING_PROVIDER", self.embedding_provider == "hashing"),
                     ("TELEPHONY_PROVIDER", self.telephony_provider == "mock"),
                     ("STT_PROVIDER", self.stt_provider == "mock"),
+                    ("CALENDAR_PROVIDER", self.calendar_provider == "mock"),
                 )
                 if is_mock
             ]

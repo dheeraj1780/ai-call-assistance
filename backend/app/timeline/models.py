@@ -32,6 +32,8 @@ class TimelineCategory(enum.StrEnum):
     TASK = "TASK"
     FOLLOW_UP = "FOLLOW_UP"
     APPOINTMENT = "APPOINTMENT"
+    SUMMARY = "SUMMARY"
+    CALENDAR = "CALENDAR"
 
 
 class TimelineEventType(enum.StrEnum):
@@ -43,6 +45,9 @@ class TimelineEventType(enum.StrEnum):
     CALL_STATUS_CHANGED = "CALL_STATUS_CHANGED"
     ACTION_ITEM_CREATED = "ACTION_ITEM_CREATED"
     ACTION_ITEM_COMPLETED = "ACTION_ITEM_COMPLETED"
+    CALL_SUMMARY = "CALL_SUMMARY"
+    FOLLOW_UP_DRAFTED = "FOLLOW_UP_DRAFTED"
+    CALENDAR_EVENT_CREATED = "CALENDAR_EVENT_CREATED"
 
 
 class TimelineEvent(UUIDPrimaryKeyMixin, TenantScopedMixin, CreatedAtMixin, Base):

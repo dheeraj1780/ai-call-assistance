@@ -24,7 +24,7 @@ This file is the hand-off point for any future session. Keep it current.
 | – | Staging deploy config (free plans, start.sh, client IP) | DONE on `main` (`c0903f6`) | unit tests + fail-closed start verified; NOT DEPLOYED |
 | 2/3 | CRM: contacts, notes, timeline, calls (manual), action items | CODE COMPLETE | frontend 25/25 pass; **backend DB tests written, NOT YET RUN** (Postgres down) |
 | 4 | Call preparation + AI agenda (AI provider layer, jobs queue) | CODE COMPLETE | frontend 26/26; backend tests `test_call_prep.py` written, NOT YET RUN |
-| 5 | Calendar (Google) | NOT STARTED | |
+| 5 | Calendar (Google OAuth, events with explicit confirmation) | CODE COMPLETE | frontend 29/29; backend unit 21/21 (Google adapter via MockTransport); DB tests NOT YET RUN; Google NOT LIVE VERIFIED |
 | 6–7 | Telephony abstraction + call sessions + webhooks | NOT STARTED | |
 | 8–9 | Streaming STT abstraction + live transcript | NOT STARTED | |
 | 10–13 | Live copilot, agenda intelligence, requirements, objections | NOT STARTED | |
