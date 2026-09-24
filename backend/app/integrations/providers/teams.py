@@ -669,6 +669,7 @@ class TeamsCallingProvider:
                     "media_ws_url": request_.media_stream_url,
                     "events_url": f"{base}/api/v1/integrations/teams/gateway/events",
                     "persistence": self.persistence,
+                    "salesperson_aad_id": request_.agent_external_id,
                     # The bot never speaks: receive-only audio.
                     "receive_only": True,
                 }

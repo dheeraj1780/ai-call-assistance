@@ -1,12 +1,37 @@
 # PROJECT STATUS — AI Calling Copilot (MSME)
 
-_Last updated: 2026-09-24. This file is the hand-off point for any future session._
+_Last updated: 2026-09-25. This file is the hand-off point for any future session._
 
 - **Current branch:** `phase-2-crm` (local only, **not pushed**; all MVP phases live here)
 - **`main`:** Phase 1 (`d2815f9`, pushed) + staging deploy config (`c0903f6`, **not pushed**)
 - **Last commit:** see `git log -1` (docs + final audit on `phase-2-crm`)
 - **Deployment:** **NOT DEPLOYED** (intentionally deferred; see `docs/DEVELOPMENT.md`)
-- **Next step:** separate deployment/Render verification phase (not started).
+- **Next step:** controlled real-provider tests, one provider at a time, with the user's
+  credentials (see `docs/integrations/testing.md`); then a deployment/Render verification phase.
+
+## Multi-channel integrations (2026-09-25)
+
+Architecture and activation guides: `docs/integrations/` (overview, microsoft-teams, whatsapp,
+plivo, credentials, testing). Migration `0008_integrations`.
+
+| Item | Status |
+|---|---|
+| Provider/channel/capability model, Settings → Integrations (write-only encrypted secrets, test, enable, config check) | IMPLEMENTED · MOCK VERIFIED |
+| Common conversation model + safe contact matching + shared AI assist for messages | IMPLEMENTED · MOCK VERIFIED |
+| WhatsApp Cloud API messaging | IMPLEMENTED · MOCK VERIFIED · CREDENTIAL REQUIRED · EXTERNAL PROVIDER VERIFICATION REQUIRED |
+| WhatsApp voice calling | NOT SUPPORTED (needs a WebRTC/SIP media service; shown as NOT_AVAILABLE) |
+| Teams messaging (delegated Graph, chat linking, notifications) | IMPLEMENTED · MOCK VERIFIED · CREDENTIAL REQUIRED · EXTERNAL PROVIDER VERIFICATION REQUIRED |
+| Teams real-time call copilot: API contract, mock gateway, transient/declared-recording persistence | IMPLEMENTED · MOCK VERIFIED |
+| `teams-media-gateway/` (.NET) | SOURCE ONLY — NOT BUILT (no .NET SDK here), NOT VERIFIED |
+| Plivo phone calls (outbound bridge, inbound, callbacks, V3 signatures) | IMPLEMENTED · MOCK VERIFIED · CREDENTIAL REQUIRED · EXTERNAL PROVIDER VERIFICATION REQUIRED |
+| Plivo real-time audio streaming | IMPLEMENTED · MOCK VERIFIED; blocked in LIVE mode until a real streaming STT provider is added |
+
+**Blocking gap for real-time copilot on real calls:** only the mock STT exists; Plivo audio and
+Teams calling need a real streaming speech-to-text provider (a product/cost decision).
+
+Verification: backend **337 passed** (239 existing + 98 new), ruff + strict mypy clean,
+`alembic check` clean, migration 0008 up/down/up verified; frontend 49 tests passed, typecheck,
+lint and production build clean.
 
 ## Local verification (2026-09-24)
 

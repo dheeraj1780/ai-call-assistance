@@ -137,6 +137,7 @@ async def start_call(
                 status_callback_url=status_url,
                 media_stream_url=media_url,
                 meeting_url=call.meeting_url,
+                agent_external_id=await _teams_user_id(session, principal) if teams else None,
             )
         )
     except TelephonyError as exc:
@@ -174,6 +175,19 @@ async def start_call(
     await session.commit()
     hub.publish(call.id, "call.status", {"status": call.status})
     return await get_call(session, principal, call.id)
+
+
+async def _teams_user_id(session: AsyncSession, principal: Principal) -> str | None:
+    from app.integrations.models import IntegrationUserConnection
+
+    value: str | None = await session.scalar(
+        select(IntegrationUserConnection.external_user_id).where(
+            IntegrationUserConnection.company_id == principal.company_id,
+            IntegrationUserConnection.user_id == principal.user_id,
+            IntegrationUserConnection.provider == "MICROSOFT_TEAMS",
+        )
+    )
+    return value
 
 
 async def request_end(session: AsyncSession, principal: Principal, call_id: uuid.UUID) -> Call:

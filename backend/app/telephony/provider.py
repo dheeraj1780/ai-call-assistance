@@ -62,6 +62,8 @@ class OutboundCallRequest:
     media_stream_url: str
     # Teams meetings: the join link the copilot bot uses (channel TEAMS only).
     meeting_url: str | None = None
+    # Teams: the salesperson's Entra user id (lets the gateway label their audio track).
+    agent_external_id: str | None = None
 
 
 @dataclass(frozen=True)
