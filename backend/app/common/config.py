@@ -113,6 +113,12 @@ class Settings(BaseSettings):
     token_encryption_key: SecretStr | None = None
 
     knowledge_max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
+    # Minimum cosine similarity for a retrieved chunk to be shown/used.
+    knowledge_min_score: float = Field(default=0.3, ge=0, le=1)
+    stt_language: str = "en-IN"
+    # Mock-telephony conversation simulator (demo/testing). Only works with TELEPHONY_PROVIDER=mock.
+    simulation_enabled: bool = True
+    simulation_utterance_delay_seconds: float = Field(default=2.0, ge=0, le=30)
     # Background jobs (knowledge processing, post-call processing, retention cleanup) run
     # in-process. Disable to run a separate worker process instead.
     jobs_worker_enabled: bool = True

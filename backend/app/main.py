@@ -23,6 +23,10 @@ from app.common.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.common.rate_limit import client_ip
 from app.contacts.router import router as contacts_router
 from app.jobs.service import worker_loop
+from app.knowledge.router import router as knowledge_router
+from app.live import session as live_sessions
+from app.live.router import router as live_router
+from app.telephony.router import router as telephony_router
 from app.tenants.router import router as tenants_router
 from app.users.router import router as users_router
 
@@ -56,6 +60,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     stop.set()
     if worker is not None:
         await worker
+    await live_sessions.close_all()
     await dispose_engine()
 
 
@@ -83,6 +88,9 @@ def create_app() -> FastAPI:
     api.include_router(action_items_router)
     api.include_router(agendas_router)
     api.include_router(calendar_router)
+    api.include_router(telephony_router)
+    api.include_router(live_router)
+    api.include_router(knowledge_router)
     app.include_router(api)
 
     @app.get("/health", tags=["health"], include_in_schema=False)

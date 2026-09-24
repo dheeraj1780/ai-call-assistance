@@ -31,7 +31,9 @@ _STOPWORDS = frozenset(
         r"[a-z]+",
         """a an and are as at be by current currently do does for from how in is it its of on or
     our the their them they this to we what when where which who why will with you your ask
-    discuss check understand about any""",
+    discuss check understand about any have has had set aside get got would could should can
+        like make much more some there here that these those been being into also just very
+        really please tell let know""",
     )
 )
 

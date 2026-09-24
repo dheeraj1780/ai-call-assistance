@@ -47,8 +47,13 @@ async def get_principal(
 ) -> Principal:
     if credentials is None:
         raise UnauthorizedError()
+    return await resolve_principal(session, settings, credentials.credentials)
+
+
+async def resolve_principal(session: AsyncSession, settings: Settings, token: str) -> Principal:
+    """Verify an access token and bind the tenant context (also used by WebSockets)."""
     try:
-        claims = decode_access_token(settings, credentials.credentials)
+        claims = decode_access_token(settings, token)
     except InvalidTokenError:
         raise UnauthorizedError("Invalid or expired token", code="invalid_token") from None
 

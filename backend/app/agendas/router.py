@@ -18,6 +18,8 @@ from app.calls.service import get_call
 from app.common.db import get_db_session
 from app.common.errors import AppError, ErrorResponse
 from app.common.rate_limit import enforce_ai_rate_limit
+from app.live import session as live_sessions
+from app.live.hub import hub
 
 router = APIRouter(
     prefix="/calls/{call_id}",
@@ -79,7 +81,12 @@ async def override_agenda_item(
     session: AsyncSession = Depends(get_db_session),
 ) -> AgendaItemOut:
     item = await service.override_status(session, principal, call_id, item_id, body.status)
-    return AgendaItemOut.model_validate(item)
+    running = live_sessions.get_session(item.call_id)
+    if running is not None:
+        running.engine.mark_manual(item.id, body.status)
+    out = AgendaItemOut.model_validate(item)
+    hub.publish(item.call_id, "agenda.updated", out.model_dump(mode="json"))
+    return out
 
 
 @router.post("/agenda/suggest", response_model=AgendaSuggestionOut)

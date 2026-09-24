@@ -127,6 +127,10 @@ class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     outcome: Mapped[str | None] = mapped_column(String(32))
     outcome_notes: Mapped[str | None] = mapped_column(Text)
     next_step: Mapped[str | None] = mapped_column(Text)
+    # Telephony (set by app/telephony; the provider is the source of truth for live states).
+    provider: Mapped[str | None] = mapped_column(String(16))
+    provider_call_id: Mapped[str | None] = mapped_column(String(128))
+    telephony_error: Mapped[str | None] = mapped_column(String(64))
 
     contact: Mapped[Contact] = relationship(
         Contact,

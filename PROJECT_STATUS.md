@@ -25,11 +25,11 @@ This file is the hand-off point for any future session. Keep it current.
 | 2/3 | CRM: contacts, notes, timeline, calls (manual), action items | CODE COMPLETE | frontend 25/25 pass; **backend DB tests written, NOT YET RUN** (Postgres down) |
 | 4 | Call preparation + AI agenda (AI provider layer, jobs queue) | CODE COMPLETE | frontend 26/26; backend tests `test_call_prep.py` written, NOT YET RUN |
 | 5 | Calendar (Google OAuth, events with explicit confirmation) | CODE COMPLETE | frontend 29/29; backend unit 21/21 (Google adapter via MockTransport); DB tests NOT YET RUN; Google NOT LIVE VERIFIED |
-| 6–7 | Telephony abstraction + call sessions + webhooks | NOT STARTED | |
-| 8–9 | Streaming STT abstraction + live transcript | NOT STARTED | |
-| 10–13 | Live copilot, agenda intelligence, requirements, objections | NOT STARTED | |
-| 14–15 | Knowledge base + retrieval | NOT STARTED | |
-| 16 | Structured live notes | NOT STARTED | |
+| 6–7 | Telephony abstraction, call lifecycle, signed idempotent webhooks, media stream | CODE COMPLETE (MOCK provider) | tests written, NOT YET RUN; LIVE PROVIDER NOT VERIFIED |
+| 8–9 | Streaming STT abstraction (mock), live transcript, browser WS with resume | CODE COMPLETE (MOCK STT) | frontend 34/34; backend tests NOT YET RUN |
+| 10–13 | Live copilot (detectors + budgeted LLM pass), agenda tracking, requirements, objections | CODE COMPLETE | detector unit tests 36/36; DB tests NOT YET RUN |
+| 14–15 | Knowledge base (PDF/DOCX/TXT, chunking, pgvector) + live retrieval | CODE COMPLETE | DB tests NOT YET RUN; Voyage embeddings NOT VERIFIED |
+| 16 | Structured live notes with human review | CODE COMPLETE | DB tests NOT YET RUN |
 | 17–21 | Post-call, action items (AI), follow-up drafts, history, timeline integration | NOT STARTED | |
 | 22 | Dashboard | NOT STARTED | |
 | 23–27 | AI safety, retention, security, reliability, cost | NOT STARTED | |

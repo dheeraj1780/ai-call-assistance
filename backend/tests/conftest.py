@@ -47,6 +47,7 @@ os.environ.update(
         "RATE_LIMIT_ENABLED": "true",
         "RATE_LIMIT_AUTH_PER_MINUTE": "1000",
         "LOG_JSON": "true",
+        "SIMULATION_UTTERANCE_DELAY_SECONDS": "0",
     }
 )
 
@@ -61,13 +62,19 @@ from app.common import handlers as _handlers  # noqa: E402, F401
 from app.common.config import get_settings  # noqa: E402
 from app.common.db import TenantContext, get_session_factory, set_tenant_context  # noqa: E402
 from app.common.rate_limit import limiter  # noqa: E402
+from app.live import session as live_sessions  # noqa: E402
+from app.live.hub import hub  # noqa: E402
 from app.main import app  # noqa: E402
+from app.speech.provider import MockSpeechToTextProvider, set_stt_provider  # noqa: E402
+from app.telephony.provider import MockTelephonyProvider, set_telephony_provider  # noqa: E402
 from app.tenants.models import CompanyMember, MemberRole  # noqa: E402
 from app.users.models import User  # noqa: E402
 
 DEFAULT_PASSWORD = "correct-horse-battery"
 CSRF = {"X-CSRF-Protection": "1"}
 TABLES = (
+    "knowledge_chunks, knowledge_documents, call_notes, copilot_insights, transcript_segments, "
+    "telephony_webhook_events, call_routes, "
     "calendar_events, calendar_connections, jobs, ai_usage_records, agenda_items, "
     "timeline_events, action_items, calls, contact_notes, contacts, "
     "audit_logs, refresh_tokens, auth_sessions, company_members, companies, users"
@@ -87,7 +94,11 @@ def _migrated_database() -> None:
 async def _clean_state() -> AsyncIterator[None]:
     limiter.reset()
     set_ai_provider(MockAIProvider())
+    set_telephony_provider(MockTelephonyProvider())
+    set_stt_provider(MockSpeechToTextProvider())
+    hub.reset()
     yield
+    await live_sessions.close_all()
     async with get_session_factory()() as session:
         await session.execute(text(f"TRUNCATE {TABLES} CASCADE"))
         await session.commit()

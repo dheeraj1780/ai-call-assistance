@@ -62,6 +62,14 @@ export function CallDetailPage() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
+              {["INITIATED", "RINGING", "CONNECTED", "ACTIVE"].includes(call.data.status) ? (
+                <Link
+                  to={`/calls/${id}/live`}
+                  className="inline-flex items-center rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white"
+                >
+                  Open live call
+                </Link>
+              ) : null}
               {call.data.status === "PLANNED" ? (
                 <Link
                   to={`/calls/${id}/prepare`}

@@ -10,6 +10,8 @@ import { ContactDetailPage } from "./pages/ContactDetailPage";
 import { ContactFormPage } from "./pages/ContactFormPage";
 import { ContactsPage } from "./pages/ContactsPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { KnowledgePage } from "./pages/KnowledgePage";
+import { LiveCallPage } from "./pages/LiveCallPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PlanCallPage } from "./pages/PlanCallPage";
 import { RegisterPage } from "./pages/RegisterPage";
@@ -48,6 +50,8 @@ export function App() {
         <Route path="contacts/:id/prepare" element={<PlanCallPage />} />
         <Route path="calls/:id" element={<CallDetailPage />} />
         <Route path="calls/:id/prepare" element={<CallPrepPage />} />
+        <Route path="calls/:id/live" element={<LiveCallPage />} />
+        <Route path="knowledge" element={<KnowledgePage />} />
         <Route path="action-items" element={<ActionItemsPage />} />
         <Route path="calendar" element={<CalendarPage />} />
       </Route>

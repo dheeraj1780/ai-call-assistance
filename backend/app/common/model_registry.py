@@ -9,7 +9,11 @@ from app.calendar.models import CalendarConnection, CalendarEvent
 from app.calls.models import Call
 from app.common.models import Base
 from app.contacts.models import Contact, ContactNote
+from app.intel.models import CallNote, CopilotInsight
 from app.jobs.models import Job
+from app.knowledge.models import KnowledgeChunk, KnowledgeDocument
+from app.live.models import TranscriptSegment
+from app.telephony.models import CallRoute, TelephonyWebhookEvent
 from app.tenants.models import Company, CompanyMember
 from app.timeline.models import TimelineEvent
 from app.users.models import User
@@ -24,12 +28,19 @@ __all__ = [
     "CalendarConnection",
     "CalendarEvent",
     "Call",
+    "CallNote",
+    "CallRoute",
     "Company",
     "CompanyMember",
     "Contact",
     "ContactNote",
+    "CopilotInsight",
     "Job",
+    "KnowledgeChunk",
+    "KnowledgeDocument",
     "RefreshToken",
+    "TelephonyWebhookEvent",
     "TimelineEvent",
+    "TranscriptSegment",
     "User",
 ]

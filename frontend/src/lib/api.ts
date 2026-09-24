@@ -90,13 +90,14 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 
   const send = () => {
     const finalHeaders: Record<string, string> = { Accept: "application/json", ...headers };
-    if (body !== undefined) finalHeaders["Content-Type"] = "application/json";
+    const isForm = typeof FormData !== "undefined" && body instanceof FormData;
+    if (body !== undefined && !isForm) finalHeaders["Content-Type"] = "application/json";
     if (auth && accessToken) finalHeaders.Authorization = `Bearer ${accessToken}`;
     return fetch(`${API_BASE}${path}`, {
       method,
       credentials: "include",
       headers: finalHeaders,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
     });
   };
 
@@ -112,6 +113,20 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   if (!response.ok) throw await parseError(response);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+/** WebSocket base: same origin by default; VITE_WS_BASE_URL overrides (e.g. when the static
+ * host cannot proxy WebSockets and the browser must connect to the API host directly). */
+export function wsUrl(path: string): string {
+  const explicit = (import.meta.env.VITE_WS_BASE_URL ?? "").replace(/\/$/, "");
+  if (explicit) return `${explicit}${path}`;
+  if (API_BASE) return `${API_BASE.replace(/^http/, "ws")}${path}`;
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${window.location.host}${path}`;
+}
+
+export function currentAccessToken(): string | null {
+  return accessToken;
 }
 
 export const authApi = {

@@ -31,6 +31,10 @@ LOCK_SECONDS = 300
 BACKOFF_SECONDS = 30
 
 
+def has_handler(kind: str) -> bool:
+    return kind in _handlers
+
+
 def register_job(kind: str) -> Callable[[JobHandler], JobHandler]:
     def decorator(fn: JobHandler) -> JobHandler:
         _handlers[kind] = fn
