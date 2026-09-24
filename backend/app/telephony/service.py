@@ -16,12 +16,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import service as audit
 from app.auth.dependencies import Principal
-from app.calls.models import TERMINAL_CALL_STATUSES, Call, CallStatus
+from app.calls.models import (
+    TERMINAL_CALL_STATUSES,
+    Call,
+    CallChannel,
+    CallStatus,
+    TranscriptPersistence,
+)
 from app.calls.service import get_call
 from app.common.config import get_settings
 from app.common.db import TenantContext, get_session_factory, set_tenant_context
 from app.common.errors import AppError, ForbiddenError, InvalidStateError
 from app.contacts.repository import ContactRepository
+from app.conversations import service as conversations
+from app.integrations import calling
+from app.integrations.domain import ConversationEventType
 from app.jobs import service as jobs
 from app.live import session as live
 from app.live.hub import hub
@@ -29,12 +38,10 @@ from app.telephony.models import CallRoute, TelephonyWebhookEvent
 from app.telephony.provider import (
     MediaControl,
     MediaFrame,
-    MockTelephonyProvider,
     OutboundCallRequest,
     ProviderCallState,
     TelephonyError,
     TelephonyEvent,
-    get_telephony_provider,
     media_token,
 )
 from app.timeline import service as timeline
@@ -87,17 +94,28 @@ async def start_call(
         raise InvalidStateError("Only a planned call can be started")
     contact = await ContactRepository(session).get(principal.company_id, call.contact_id)
     user = await session.get(User, principal.user_id)
-    if contact is None or not contact.phone:
-        raise MissingPhoneError("Add the customer's phone number before starting the call")
-    if user is None or not user.phone:
-        raise MissingPhoneError("Add your own phone number in your profile before starting a call")
+    teams = call.channel == CallChannel.TEAMS
+    if contact is None:
+        raise MissingPhoneError("Contact not found")
+    if not teams:
+        if not contact.phone:
+            raise MissingPhoneError("Add the customer's phone number before starting the call")
+        if user is None or not user.phone:
+            raise MissingPhoneError(
+                "Add your own phone number in your profile before starting a call"
+            )
+    elif not call.meeting_url:
+        raise InvalidStateError("A Teams call needs the meeting link")
 
-    provider = get_telephony_provider()
+    resolved = await calling.resolve_for_start(session, principal.company_id, call)
+    provider = resolved.provider
     call.status = CallStatus.INITIATED.value
     call.user_id = call.user_id or principal.user_id
     call.provider = provider.name
     call.telephony_error = None
+    call.transcript_persistence = resolved.persistence.value
     session.add(CallRoute(call_id=call.id, company_id=principal.company_id, provider=provider.name))
+    await conversations.open_call_session(session, call, integration_id=resolved.integration_id)
     audit.record(
         session,
         "call.started",
@@ -114,10 +132,11 @@ async def start_call(
         provider_call_id = await provider.create_call(
             OutboundCallRequest(
                 call_id=call.id,
-                agent_number=user.phone,
-                customer_number=contact.phone,
+                agent_number=(user.phone if user and user.phone else ""),
+                customer_number=contact.phone or "",
                 status_callback_url=status_url,
                 media_stream_url=media_url,
+                meeting_url=call.meeting_url,
             )
         )
     except TelephonyError as exc:
@@ -135,6 +154,15 @@ async def start_call(
             from_status=CallStatus.INITIATED.value,
             to_status=CallStatus.FAILED.value,
             call_id=call.id,
+            channel=call.channel,
+        )
+        await conversations.record_call_event(
+            session,
+            principal.company_id,
+            call.id,
+            ConversationEventType.CALL_ENDED,
+            status=CallStatus.FAILED.value,
+            ended=True,
         )
         await session.commit()
         hub.publish(call.id, "call.status", {"status": call.status})
@@ -158,13 +186,13 @@ async def request_end(session: AsyncSession, principal: Principal, call_id: uuid
         return call
     if call.status == CallStatus.PLANNED:
         raise InvalidStateError("This call has not been started")
-    provider = get_telephony_provider()
-    if call.provider_call_id:
+    provider = await calling.provider_for_call(session, principal.company_id, call)
+    if call.provider_call_id and provider is not None:
         try:
             await provider.end_call(call.provider_call_id)
         except TelephonyError:
             logger.warning("telephony_end_failed", extra={"call_id": str(call.id)})
-        if isinstance(provider, MockTelephonyProvider):
+        if provider.emits_end_events:
             state = (
                 ProviderCallState.COMPLETED
                 if call.status in (CallStatus.CONNECTED, CallStatus.ACTIVE)
@@ -250,6 +278,62 @@ async def process_event(provider_name: str, event: TelephonyEvent) -> str:
     return "applied"
 
 
+async def process_event_for_call(
+    provider_name: str, company_id: uuid.UUID, call_id: uuid.UUID, event: TelephonyEvent
+) -> str:
+    """Like ``process_event`` for providers whose callbacks carry our call id in a signed URL
+    (Plivo). The route must belong to the same tenant and provider; the provider's call id is
+    recorded on first sight so hang-up requests can address the live call."""
+    async with get_session_factory()() as session:
+        route = await session.get(CallRoute, call_id)
+        if route is None or route.company_id != company_id or route.provider != provider_name:
+            return "unknown_call"
+        inserted = await session.scalar(
+            insert(TelephonyWebhookEvent)
+            .values(
+                id=uuid.uuid4(),
+                provider=provider_name,
+                event_id=event.event_id,
+                provider_call_id=event.provider_call_id,
+                state=event.state.value,
+                call_id=call_id,
+            )
+            .on_conflict_do_nothing(index_elements=["provider", "event_id"])
+            .returning(TelephonyWebhookEvent.id)
+        )
+        if inserted is None:
+            await session.rollback()
+            return "duplicate"
+        route.provider_call_id = route.provider_call_id or event.provider_call_id
+        await session.commit()
+    async with get_session_factory()() as session:
+        await set_tenant_context(session, TenantContext(company_id=company_id))
+        call = await session.scalar(
+            select(Call).where(Call.company_id == company_id, Call.id == call_id)
+        )
+        if call is not None and call.provider_call_id != event.provider_call_id:
+            call.provider_call_id = event.provider_call_id
+            await session.commit()
+    changed = await apply_state(
+        company_id,
+        call_id,
+        CallStatus(event.state.value),
+        event.occurred_at,
+        duration=event.duration_seconds,
+        error=event.error_code,
+    )
+    if not changed:
+        async with get_session_factory()() as session:
+            await session.execute(
+                update(TelephonyWebhookEvent)
+                .where(TelephonyWebhookEvent.id == inserted)
+                .values(applied="ignored")
+            )
+            await session.commit()
+        return "ignored"
+    return "applied"
+
+
 async def apply_state(
     company_id: uuid.UUID,
     call_id: uuid.UUID,
@@ -286,19 +370,39 @@ async def apply_state(
                 call.telephony_error = error[:64]
         if new in TIMELINE_STATES:
             label = new.value.replace("_", " ").lower()
+            prefix = "Teams call" if call.channel == CallChannel.TEAMS else "Call"
             timeline.record(
                 session,
                 company_id=company_id,
                 contact_id=call.contact_id,
                 category=TimelineCategory.CALL,
                 event_type=TimelineEventType.CALL_STATUS_CHANGED,
-                summary=f"Call {label}",
+                summary=f"{prefix} {label}",
                 actor_user_id=None,
                 from_status=old,
                 to_status=new.value,
                 call_id=call.id,
+                channel=call.channel,
             )
-        if new in TERMINAL_CALL_STATUSES and jobs.has_handler("postcall.process"):
+        if new == CallStatus.CONNECTED:
+            await conversations.record_call_event(
+                session, company_id, call.id, ConversationEventType.CALL_CONNECTED
+            )
+        if new in TERMINAL_CALL_STATUSES:
+            await conversations.record_call_event(
+                session,
+                company_id,
+                call.id,
+                ConversationEventType.CALL_ENDED,
+                status=new.value,
+                ended=True,
+            )
+        if (
+            new in TERMINAL_CALL_STATUSES
+            and jobs.has_handler("postcall.process")
+            # Nothing derived from media may be stored for a transient (e.g. Teams) call.
+            and call.transcript_persistence == TranscriptPersistence.PERSISTED
+        ):
             await jobs.enqueue(
                 session,
                 "postcall.process",
@@ -329,13 +433,19 @@ class MediaIngest:
     def __init__(self, call_id: uuid.UUID) -> None:
         self.call_id = call_id
         self.started = False
+        self.encoding = "mulaw"
+        self.sample_rate = 8000
 
     async def handle(self, message: MediaFrame | MediaControl | None) -> None:
         if message is None:
             return
         if isinstance(message, MediaControl):
             if message.kind == "start":
+                self.encoding = message.encoding or self.encoding
+                self.sample_rate = message.sample_rate or self.sample_rate
                 await self._start()
+            elif message.kind == "stop":
+                await self._stopped()
             return
         if not self.started:
             await self._start()
@@ -361,7 +471,28 @@ class MediaIngest:
             )
         if status is None or CallStatus(status) in TERMINAL_CALL_STATUSES:
             return  # never process audio for a call that has already ended
+        async with get_session_factory()() as db:
+            await set_tenant_context(db, TenantContext(company_id=route.company_id))
+            await conversations.record_call_event(
+                db, route.company_id, self.call_id, ConversationEventType.AUDIO_STREAM_STARTED
+            )
+            await db.commit()
         try:
-            await live.get_or_open(self.call_id)
+            await live.get_or_open(
+                self.call_id, encoding=self.encoding, sample_rate=self.sample_rate
+            )
         except LookupError:
             logger.warning("media_for_unknown_call")
+
+    async def _stopped(self) -> None:
+        """The provider closed the audio stream. The call itself may continue."""
+        async with get_session_factory()() as db:
+            route = await db.get(CallRoute, self.call_id)
+        if route is None:
+            return
+        async with get_session_factory()() as db:
+            await set_tenant_context(db, TenantContext(company_id=route.company_id))
+            await conversations.record_call_event(
+                db, route.company_id, self.call_id, ConversationEventType.AUDIO_STREAM_ENDED
+            )
+            await db.commit()

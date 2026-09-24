@@ -4,7 +4,10 @@
                                                   -> browser (live hub)
                                                   -> copilot engine
 
-Raw audio is handed to the STT stream and dropped; it is never written anywhere. STT failures
+Raw audio is handed to the STT stream and dropped; it is never written anywhere. When a call's
+``transcript_persistence`` is not PERSISTED (e.g. a Teams call without declared recording), the
+session is TRANSIENT: transcript and copilot output go to the live screen only and nothing
+derived from the audio is written to the database. STT failures
 are contained per track (bounded re-open with backoff); copilot failures are contained in the
 engine. Neither can end the phone call, which lives at the telephony provider.
 """
@@ -19,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 
-from app.calls.models import Call
+from app.calls.models import Call, TranscriptPersistence
 from app.common.config import get_settings
 from app.common.db import TenantContext, get_session_factory, set_tenant_context
 from app.copilot.engine import CopilotEngine, SegmentView
@@ -56,6 +59,9 @@ class LiveSession:
     contact_id: uuid.UUID
     retention_days: int
     engine: CopilotEngine
+    persist: bool = True
+    encoding: str = "mulaw"
+    sample_rate: int = 8000
     next_seq: int = 1
     closed: bool = False
     stt_ok: bool = True
@@ -64,7 +70,9 @@ class LiveSession:
     frames_received: int = 0
 
     @classmethod
-    async def open(cls, call_id: uuid.UUID) -> "LiveSession":
+    async def open(
+        cls, call_id: uuid.UUID, *, encoding: str = "mulaw", sample_rate: int = 8000
+    ) -> "LiveSession":
         async with get_session_factory()() as session:
             route = await session.get(CallRoute, call_id)
             if route is None:
@@ -82,12 +90,14 @@ class LiveSession:
                     TranscriptSegment.call_id == call_id,
                 )
             )
+            persist = call.transcript_persistence == TranscriptPersistence.PERSISTED
             engine = await CopilotEngine.create(
                 route.company_id,
                 call_id,
                 call.contact_id,
                 call.objective,
                 company.transcript_retention_days,
+                persist=persist,
             )
             return cls(
                 company_id=route.company_id,
@@ -95,6 +105,9 @@ class LiveSession:
                 contact_id=call.contact_id,
                 retention_days=company.transcript_retention_days,
                 engine=engine,
+                persist=persist,
+                encoding=encoding,
+                sample_rate=sample_rate,
                 next_seq=(max_seq or 0) + 1,
             )
 
@@ -122,7 +135,9 @@ class LiveSession:
             return None
         try:
             ts.stream = await get_stt_provider().open_stream(
-                language=get_settings().stt_language, sample_rate=8000, encoding="mulaw"
+                language=get_settings().stt_language,
+                sample_rate=self.sample_rate,
+                encoding=self.encoding,
             )
         except (STTError, Exception):
             logger.warning("stt_open_failed", extra={"call_id": str(self.call_id)})
@@ -193,10 +208,11 @@ class LiveSession:
                 source=get_stt_provider().name,
                 expires_at=datetime.now(UTC) + timedelta(days=self.retention_days),
             )
-            async with get_session_factory()() as session:
-                await set_tenant_context(session, TenantContext(company_id=self.company_id))
-                session.add(segment)
-                await session.commit()
+            if self.persist:
+                async with get_session_factory()() as session:
+                    await set_tenant_context(session, TenantContext(company_id=self.company_id))
+                    session.add(segment)
+                    await session.commit()
         hub.publish(self.call_id, "transcript.final", segment_payload(segment))
         await self.engine.on_segment(SegmentView(segment.id, seq, speaker, segment.text))
 
@@ -237,12 +253,14 @@ _sessions: dict[uuid.UUID, LiveSession] = {}
 _open_lock = asyncio.Lock()
 
 
-async def get_or_open(call_id: uuid.UUID) -> LiveSession:
+async def get_or_open(
+    call_id: uuid.UUID, *, encoding: str = "mulaw", sample_rate: int = 8000
+) -> LiveSession:
     async with _open_lock:
         existing = _sessions.get(call_id)
         if existing is not None and not existing.closed:
             return existing
-        session = await LiveSession.open(call_id)
+        session = await LiveSession.open(call_id, encoding=encoding, sample_rate=sample_rate)
         _sessions[call_id] = session
         return session
 

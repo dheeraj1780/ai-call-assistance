@@ -34,6 +34,7 @@ class TimelineCategory(enum.StrEnum):
     APPOINTMENT = "APPOINTMENT"
     SUMMARY = "SUMMARY"
     CALENDAR = "CALENDAR"
+    MESSAGE = "MESSAGE"
 
 
 class TimelineEventType(enum.StrEnum):
@@ -48,6 +49,9 @@ class TimelineEventType(enum.StrEnum):
     CALL_SUMMARY = "CALL_SUMMARY"
     FOLLOW_UP_DRAFTED = "FOLLOW_UP_DRAFTED"
     CALENDAR_EVENT_CREATED = "CALENDAR_EVENT_CREATED"
+    MESSAGE_RECEIVED = "MESSAGE_RECEIVED"
+    MESSAGE_SENT = "MESSAGE_SENT"
+    CONVERSATION_LINKED = "CONVERSATION_LINKED"
 
 
 class TimelineEvent(UUIDPrimaryKeyMixin, TenantScopedMixin, CreatedAtMixin, Base):
@@ -85,6 +89,15 @@ class TimelineEvent(UUIDPrimaryKeyMixin, TenantScopedMixin, CreatedAtMixin, Base
             ondelete="CASCADE",
             name="fk_timeline_events_action_item",
         ),
+        ForeignKeyConstraint(
+            ["company_id", "session_id"],
+            ["communication_sessions.company_id", "communication_sessions.id"],
+            ondelete="CASCADE",
+            name="fk_timeline_events_session",
+        ),
+        CheckConstraint(
+            "channel IS NULL OR channel IN ('PHONE', 'TEAMS', 'WHATSAPP')", name="channel_valid"
+        ),
         Index(
             "ix_timeline_events_contact_occurred",
             "company_id",
@@ -107,3 +120,6 @@ class TimelineEvent(UUIDPrimaryKeyMixin, TenantScopedMixin, CreatedAtMixin, Base
     note_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     call_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     action_item_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Communication channel the event happened on (PHONE / TEAMS / WHATSAPP), if any.
+    channel: Mapped[str | None] = mapped_column(String(16))
+    session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

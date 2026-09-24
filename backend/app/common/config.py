@@ -106,7 +106,9 @@ class Settings(BaseSettings):
     embedding_provider: Literal["hashing", "voyage"] = "hashing"
     voyage_api_key: SecretStr | None = None
 
-    telephony_provider: Literal["mock"] = "mock"
+    # Fallback calling provider for PHONE calls when a company has no enabled Plivo
+    # integration: "mock" (development/demo) or "none" (phone calls require an integration).
+    telephony_provider: Literal["mock", "none"] = "mock"
     stt_provider: Literal["mock"] = "mock"
     # HMAC secret for telephony webhooks / media-stream tokens. Required in production.
     telephony_webhook_secret: SecretStr | None = None
@@ -136,6 +138,26 @@ class Settings(BaseSettings):
     jobs_poll_interval_seconds: float = Field(default=2.0, gt=0)
     retention_sweep_interval_seconds: int = Field(default=3600, ge=60)
 
+    # ---- Communication integrations (see docs/integrations) -----------------------------
+    # Platform-level Microsoft Entra app (multi-tenant) used for Teams messaging OAuth and
+    # Graph calls. A company may override both with its own app registration in the UI.
+    microsoft_client_id: str | None = None
+    microsoft_client_secret: SecretStr | None = None
+    microsoft_login_base_url: str = "https://login.microsoftonline.com"
+    microsoft_graph_base_url: str = "https://graph.microsoft.com/v1.0"
+    # Teams real-time media gateway (.NET service, see teams-media-gateway/). Both are
+    # required for the Teams real-time call capability in LIVE mode.
+    teams_media_gateway_url: str | None = None
+    teams_media_gateway_secret: SecretStr | None = None
+    whatsapp_graph_base_url: str = "https://graph.facebook.com"
+    whatsapp_graph_api_version: str = Field(default="v23.0", pattern=r"^v\d+\.\d+$")
+    plivo_api_base_url: str = "https://api.plivo.com"
+    integration_http_timeout_seconds: float = Field(default=15.0, gt=0, le=60)
+    # Country calling code assumed for local numbers (10 digits) when matching contacts.
+    default_phone_country_code: str = Field(default="91", pattern=r"^[1-9]\d{0,2}$")
+    # AI reply suggestions / extraction for incoming messages (never auto-sent).
+    conversation_ai_assist_enabled: bool = True
+
     # Mock providers must never silently serve real users.
     allow_mock_providers_in_production: bool = False
 
@@ -149,6 +171,11 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def integration_mock_allowed(self) -> bool:
+        """Integrations may run in MOCK mode (no credentials, nothing sent externally)."""
+        return not self.is_production or self.allow_mock_providers_in_production
 
     @property
     def knowledge_score_threshold(self) -> float:
@@ -214,6 +241,17 @@ class Settings(BaseSettings):
                 raise ValueError("TOKEN_ENCRYPTION_KEY (>= 32 chars) is required in production")
             if len(self.telephony_webhook_secret.get_secret_value()) < 32:
                 raise ValueError("TELEPHONY_WEBHOOK_SECRET must be at least 32 characters")
+            if self.teams_media_gateway_url and not self.teams_media_gateway_url.startswith(
+                "https://"
+            ):
+                raise ValueError("TEAMS_MEDIA_GATEWAY_URL must use https in production")
+        if self.teams_media_gateway_url and (
+            self.teams_media_gateway_secret is None
+            or len(self.teams_media_gateway_secret.get_secret_value()) < 32
+        ):
+            raise ValueError(
+                "TEAMS_MEDIA_GATEWAY_URL requires TEAMS_MEDIA_GATEWAY_SECRET (>= 32 chars)"
+            )
         normalize_database_url(self.database_url)
         return self
 

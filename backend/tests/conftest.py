@@ -77,6 +77,7 @@ from app.common import handlers as _handlers  # noqa: E402, F401
 from app.common.config import get_settings  # noqa: E402
 from app.common.db import TenantContext, get_session_factory, set_tenant_context  # noqa: E402
 from app.common.rate_limit import limiter  # noqa: E402
+from app.integrations.providers import factory as integration_factory  # noqa: E402
 from app.live import session as live_sessions  # noqa: E402
 from app.live.hub import hub  # noqa: E402
 from app.main import app  # noqa: E402
@@ -88,6 +89,10 @@ from app.users.models import User  # noqa: E402
 DEFAULT_PASSWORD = "correct-horse-battery"
 CSRF = {"X-CSRF-Protection": "1"}
 TABLES = (
+    "message_drafts, communication_events, communication_participants, communication_messages, "
+    "communication_sessions, contact_identities, integration_subscriptions, "
+    "integration_user_connections, integrations, integration_routes, "
+    "integration_webhook_receipts, "
     "follow_up_drafts, call_summaries, "
     "knowledge_chunks, knowledge_documents, call_notes, copilot_insights, transcript_segments, "
     "telephony_webhook_events, call_routes, "
@@ -112,6 +117,8 @@ async def _clean_state() -> AsyncIterator[None]:
     set_ai_provider(MockAIProvider())
     set_telephony_provider(MockTelephonyProvider())
     set_stt_provider(MockSpeechToTextProvider())
+    integration_factory.set_http_transport(None)
+    integration_factory.reset_mocks()
     hub.reset()
     yield
     await live_sessions.close_all()

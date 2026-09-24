@@ -25,6 +25,7 @@ class AITask(enum.StrEnum):
     KNOWLEDGE_ANSWER = "KNOWLEDGE_ANSWER"
     POST_CALL = "POST_CALL"
     FOLLOW_UP = "FOLLOW_UP"
+    MESSAGE_ASSIST = "MESSAGE_ASSIST"
 
 
 class AIError(Exception):

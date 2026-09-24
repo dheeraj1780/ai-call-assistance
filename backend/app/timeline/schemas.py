@@ -20,6 +20,8 @@ class TimelineEventOut(APIModel):
     note_id: uuid.UUID | None
     call_id: uuid.UUID | None
     action_item_id: uuid.UUID | None
+    channel: str | None = None
+    session_id: uuid.UUID | None = None
 
 
 class TimelinePage(BaseModel):

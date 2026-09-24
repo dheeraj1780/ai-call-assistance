@@ -125,8 +125,11 @@ async def live_snapshot(
             "stt": "ok" if running is None or running.stt_ok else "unavailable",
             "copilot": "degraded" if running is not None and running.engine.degraded else "ok",
         },
-        "simulation_available": settings.telephony_provider == "mock"
-        and settings.simulation_enabled,
+        "simulation_available": settings.simulation_enabled
+        and not settings.is_production
+        and (call.provider in ("mock", "teams-mock") or call.status == "PLANNED"),
+        "channel": call.channel,
+        "transcript_persistence": call.transcript_persistence,
     }
 
 

@@ -18,6 +18,7 @@ import hmac
 import json
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -59,6 +60,8 @@ class OutboundCallRequest:
     customer_number: str
     status_callback_url: str
     media_stream_url: str
+    # Teams meetings: the join link the copilot bot uses (channel TEAMS only).
+    meeting_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -81,10 +84,15 @@ class MediaFrame:
 @dataclass(frozen=True)
 class MediaControl:
     kind: str  # "start" | "stop"
+    # Audio format announced by the stream (start only): "mulaw" 8 kHz for PSTN,
+    # "linear16" 16 kHz for the Teams media gateway.
+    encoding: str | None = None
+    sample_rate: int | None = None
 
 
 class TelephonyProvider(Protocol):
     name: str
+    emits_end_events: bool
 
     async def create_call(self, request: OutboundCallRequest) -> str: ...
     async def end_call(self, provider_call_id: str) -> None: ...
@@ -114,6 +122,9 @@ def sign_mock_webhook(body: bytes, timestamp: int | None = None) -> str:
 
 class MockTelephonyProvider:
     name = "mock"
+    # The mock emits the final state itself when asked to hang up (a real provider sends a
+    # webhook instead).
+    emits_end_events = True
 
     def __init__(self) -> None:
         self.created: list[OutboundCallRequest] = []
@@ -164,23 +175,56 @@ class MockTelephonyProvider:
             raise WebhookVerificationError("malformed webhook payload") from exc
 
     def parse_media_message(self, message: str) -> MediaFrame | MediaControl | None:
-        try:
-            data = json.loads(message)
-        except ValueError:
-            return None
-        event = data.get("event")
-        if event in ("start", "stop"):
-            return MediaControl(kind=event)
-        if event == "media":
-            try:
-                return MediaFrame(
-                    track=Track(data["track"]),
-                    sequence=int(data["seq"]),
-                    audio=base64.b64decode(data["payload"], validate=True),
-                )
-            except (ValueError, KeyError):
-                return None
+        return parse_json_media_message(message)
+
+
+def parse_json_media_message(message: str) -> MediaFrame | MediaControl | None:
+    """The app's own media stream format (mock provider, simulator, Teams media gateway):
+    {"event": "start", "format": {"encoding": "linear16", "sample_rate": 16000}}
+    {"event": "media", "track": "agent|customer|mixed", "seq": 1, "payload": "<base64>"}
+    {"event": "stop"}
+    """
+    try:
+        data = json.loads(message)
+    except ValueError:
         return None
+    if not isinstance(data, dict):
+        return None
+    event = data.get("event")
+    if event == "start":
+        raw_fmt = data.get("format")
+        fmt: dict[str, Any] = raw_fmt if isinstance(raw_fmt, dict) else {}
+        encoding = fmt.get("encoding") if fmt.get("encoding") in ("mulaw", "linear16") else None
+        rate = fmt.get("sample_rate")
+        return MediaControl(
+            kind="start",
+            encoding=encoding,
+            sample_rate=rate if isinstance(rate, int) and 8000 <= rate <= 48000 else None,
+        )
+    if event == "stop":
+        return MediaControl(kind="stop")
+    if event == "media":
+        try:
+            return MediaFrame(
+                track=Track(data["track"]),
+                sequence=int(data["seq"]),
+                audio=base64.b64decode(data["payload"], validate=True),
+            )
+        except (ValueError, KeyError, TypeError):
+            return None
+    return None
+
+
+def media_parser_for(
+    provider_name: str, *, a_leg: str = "agent"
+) -> Callable[[str], MediaFrame | MediaControl | None]:
+    """Stateless media message parser for a provider's WebSocket stream."""
+    if provider_name == "plivo":
+        from app.integrations.providers.plivo import parse_media_message
+
+        swap = a_leg == "customer"
+        return lambda message: parse_media_message(message, swap_tracks=swap)
+    return parse_json_media_message
 
 
 _provider: TelephonyProvider | None = None

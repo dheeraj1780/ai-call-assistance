@@ -124,8 +124,9 @@ async def suggest_note(
     session: AsyncSession,
     *,
     company_id: uuid.UUID,
-    call_id: uuid.UUID,
+    call_id: uuid.UUID | None,
     contact_id: uuid.UUID,
+    session_id: uuid.UUID | None = None,
     kind: NoteKind,
     text: str,
     source: IntelSource,
@@ -140,6 +141,7 @@ async def suggest_note(
             id=uuid.uuid4(),
             company_id=company_id,
             call_id=call_id,
+            session_id=session_id,
             contact_id=contact_id,
             kind=kind.value,
             category=category.value if category else None,
@@ -150,13 +152,16 @@ async def suggest_note(
             source_segment_id=segment_id,
             dedupe_key=dedupe_key[:128],
         )
-        .on_conflict_do_nothing(index_elements=["call_id", "dedupe_key"])
+        .on_conflict_do_nothing(
+            index_elements=["call_id", "dedupe_key"] if call_id else ["session_id", "dedupe_key"]
+        )
         .returning(CallNote)
     )
     if row is None:
         return None
     await session.commit()
-    hub.publish(call_id, "note.upserted", note_payload(row))
+    if call_id is not None:
+        hub.publish(call_id, "note.upserted", note_payload(row))
     return row
 
 

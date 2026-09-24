@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import service as audit
 from app.auth.dependencies import Principal
-from app.calls.models import CALL_TRANSITIONS, Call, CallStatus
+from app.calls.models import CALL_TRANSITIONS, Call, CallChannel, CallStatus
 from app.calls.repository import CallRepository
 from app.calls.schemas import CallCreate, CallUpdate
 from app.common.errors import (
@@ -65,6 +65,8 @@ async def create_call(
         desired_outcome=data.desired_outcome,
         scheduled_at=data.scheduled_at,
         status=CallStatus.PLANNED.value,
+        channel=data.channel.value,
+        meeting_url=data.meeting_url.strip() if data.meeting_url else None,
     )
     session.add(call)
     await session.flush()
@@ -76,7 +78,9 @@ async def create_call(
         contact_id=contact.id,
         category=TimelineCategory.CALL,
         event_type=TimelineEventType.CALL_PLANNED,
-        summary=f"Call planned{when}{objective}",
+        summary=f"{'Teams call' if data.channel == CallChannel.TEAMS else 'Call'} planned"
+        f"{when}{objective}",
+        channel=data.channel.value,
         actor_user_id=principal.user_id,
         to_status=CallStatus.PLANNED.value,
         call_id=call.id,

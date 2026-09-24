@@ -35,6 +35,19 @@ def has_handler(kind: str) -> bool:
     return kind in _handlers
 
 
+_periodic: dict[str, int] = {}
+
+
+def register_periodic(kind: str, *, interval_seconds: int) -> Callable[[JobHandler], JobHandler]:
+    """Schedule ``kind`` (a registered job) every ``interval_seconds`` from the worker loop."""
+
+    def decorator(fn: JobHandler) -> JobHandler:
+        _periodic[kind] = interval_seconds
+        return fn
+
+    return decorator
+
+
 def register_job(kind: str) -> Callable[[JobHandler], JobHandler]:
     def decorator(fn: JobHandler) -> JobHandler:
         _handlers[kind] = fn
@@ -140,6 +153,7 @@ async def drain(max_jobs: int = 100) -> int:
 async def worker_loop(stop: asyncio.Event) -> None:
     settings = get_settings()
     last_sweep = 0.0
+    last_periodic: dict[str, float] = {}
     loop = asyncio.get_running_loop()
     while not stop.is_set():
         try:
@@ -149,6 +163,10 @@ async def worker_loop(stop: asyncio.Event) -> None:
             ):
                 last_sweep = loop.time()
                 await schedule_retention_sweep()
+            for kind, interval in _periodic.items():
+                if loop.time() - last_periodic.get(kind, -interval) >= interval:
+                    last_periodic[kind] = loop.time()
+                    await schedule_periodic(kind, interval)
             worked = await run_one()
         except Exception:
             logger.exception("job_worker_error")
@@ -162,4 +180,11 @@ async def schedule_retention_sweep() -> None:
     bucket = datetime.now(UTC).strftime("%Y%m%d%H")
     async with get_session_factory()() as session:
         await enqueue(session, "retention.sweep", company_id=None, dedupe_key=f"retention:{bucket}")
+        await session.commit()
+
+
+async def schedule_periodic(kind: str, interval_seconds: int) -> None:
+    bucket = int(datetime.now(UTC).timestamp()) // max(interval_seconds, 1)
+    async with get_session_factory()() as session:
+        await enqueue(session, kind, company_id=None, dedupe_key=f"{kind}:{bucket}")
         await session.commit()

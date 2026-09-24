@@ -12,6 +12,10 @@ Pipeline for every FINAL transcript segment (partials are ignored):
 
 Every failure is caught: the copilot degrades to "unavailable" but the call, the transcript
 and the media pipeline continue.
+
+TRANSIENT mode (``persist=False``, e.g. Teams calls without declared recording): the same
+analysis runs, but notes, cards and agenda changes are only published to the live screen and
+never written to the database.
 """
 
 import asyncio
@@ -161,6 +165,8 @@ class CopilotEngine:
     degraded: bool = False
     last_question_at: float = 0.0
     known_notes: list[str] = field(default_factory=list)
+    persist: bool = True
+    _transient_keys: set[str] = field(default_factory=set)
 
     @classmethod
     async def create(
@@ -170,8 +176,10 @@ class CopilotEngine:
         contact_id: uuid.UUID,
         objective: str | None,
         retention_days: int,
+        *,
+        persist: bool = True,
     ) -> "CopilotEngine":
-        engine = cls(company_id, call_id, contact_id, objective, retention_days)
+        engine = cls(company_id, call_id, contact_id, objective, retention_days, persist=persist)
         async with get_session_factory()() as session:
             await set_tenant_context(session, TenantContext(company_id=company_id))
             items = await session.scalars(
@@ -227,20 +235,23 @@ class CopilotEngine:
         self, session: AsyncSession, d: Detection, segment_id: uuid.UUID | None, source: IntelSource
     ) -> None:
         key = f"{d.kind}:{d.key or short_hash(d.text)}"
-        note = await suggest_note(
-            session,
-            company_id=self.company_id,
-            call_id=self.call_id,
-            contact_id=self.contact_id,
-            kind=d.kind,
-            text=d.text,
-            source=source,
-            dedupe_key=key,
-            confidence=d.confidence,
-            category=d.category,
-            segment_id=segment_id,
-        )
-        if note is None:
+        if self.persist:
+            note = await suggest_note(
+                session,
+                company_id=self.company_id,
+                call_id=self.call_id,
+                contact_id=self.contact_id,
+                kind=d.kind,
+                text=d.text,
+                source=source,
+                dedupe_key=key,
+                confidence=d.confidence,
+                category=d.category,
+                segment_id=segment_id,
+            )
+            if note is None:
+                return
+        elif not self._transient_note(d, key, source):
             return
         self.known_notes.append(f"{d.kind}: {d.text}")
         card: tuple[InsightType, InsightPriority, str] | None = None
@@ -269,16 +280,13 @@ class CopilotEngine:
                 f"{label.capitalize()}: {d.text}",
             )
         if card:
-            await add_insight(
+            await self._insight(
                 session,
-                company_id=self.company_id,
-                call_id=self.call_id,
                 type_=card[0],
                 content=card[2],
                 priority=card[1],
                 source=source,
                 dedupe_key=f"card:{key}",
-                retention_days=self.retention_days,
                 confidence=d.confidence,
                 segment_id=segment_id,
             )
@@ -332,6 +340,20 @@ class CopilotEngine:
     async def _persist_agenda(
         self, changes: list[tuple[_AgendaState, AgendaItemStatus, str, float]], source: StatusSource
     ) -> None:
+        if not self.persist:
+            for state, status, reason, confidence in changes:
+                hub.publish(
+                    self.call_id,
+                    "agenda.updated",
+                    {
+                        "id": str(state.id),
+                        "status": status.value,
+                        "status_source": source.value,
+                        "status_confidence": confidence,
+                        "status_reason": reason,
+                    },
+                )
+            return
         async with get_session_factory()() as session:
             await set_tenant_context(session, TenantContext(company_id=self.company_id))
             for state, status, reason, confidence in changes:
@@ -372,29 +394,23 @@ class CopilotEngine:
         item.reminded = True
         async with get_session_factory()() as session:
             await set_tenant_context(session, TenantContext(company_id=self.company_id))
-            await add_insight(
+            await self._insight(
                 session,
-                company_id=self.company_id,
-                call_id=self.call_id,
                 type_=InsightType.MISSING_AGENDA_ITEM,
                 priority=InsightPriority.MEDIUM,
                 content=f"{item.title} hasn't been discussed yet.",
                 source=IntelSource.DETERMINISTIC,
                 dedupe_key=f"missing:{item.id}",
-                retention_days=self.retention_days,
             )
             if item.question and time.monotonic() - self.last_question_at > QUESTION_COOLDOWN_S:
                 self.last_question_at = time.monotonic()
-                await add_insight(
+                await self._insight(
                     session,
-                    company_id=self.company_id,
-                    call_id=self.call_id,
                     type_=InsightType.QUESTION_SUGGESTION,
                     priority=InsightPriority.MEDIUM,
                     content=item.question,
                     source=IntelSource.DETERMINISTIC,
                     dedupe_key=f"question:agenda:{item.id}",
-                    retention_days=self.retention_days,
                     context=f"Agenda: {item.title}",
                 )
 
@@ -412,31 +428,25 @@ class CopilotEngine:
             if good:
                 best = good[0]
                 snippet = " ".join(best.content.split())[:400]
-                await add_insight(
+                await self._insight(
                     session,
-                    company_id=self.company_id,
-                    call_id=self.call_id,
                     type_=InsightType.KNOWLEDGE_RESULT,
                     priority=InsightPriority.HIGH,
                     content=snippet,
                     source=IntelSource.KNOWLEDGE,
                     dedupe_key=key,
-                    retention_days=self.retention_days,
                     confidence=round(best.score, 3),
                     context=f"Company knowledge: {best.title}",
                     segment_id=seg.id,
                 )
             else:
-                await add_insight(
+                await self._insight(
                     session,
-                    company_id=self.company_id,
-                    call_id=self.call_id,
                     type_=InsightType.KNOWLEDGE_RESULT,
                     priority=InsightPriority.LOW,
                     content="No relevant company information found for the customer's question.",
                     source=IntelSource.KNOWLEDGE,
                     dedupe_key=key,
-                    retention_days=self.retention_days,
                     context="Company knowledge",
                     segment_id=seg.id,
                 )
@@ -528,16 +538,13 @@ class CopilotEngine:
                 and time.monotonic() - self.last_question_at > QUESTION_COOLDOWN_S
             ):
                 self.last_question_at = time.monotonic()
-                await add_insight(
+                await self._insight(
                     session,
-                    company_id=self.company_id,
-                    call_id=self.call_id,
                     type_=InsightType.QUESTION_SUGGESTION,
                     priority=InsightPriority.MEDIUM,
                     content=delta.suggested_question,
                     source=IntelSource.AI,
                     dedupe_key=f"question:{short_hash(delta.suggested_question)}",
-                    retention_days=self.retention_days,
                 )
         by_id = {str(a.id): a for a in self.agenda}
         changes = []
@@ -550,6 +557,81 @@ class CopilotEngine:
             changes.append((state, new_status, u.reason, u.confidence))
         if changes:
             await self._persist_agenda(changes, StatusSource.AI)
+
+    # -- persistence helpers ------------------------------------------------------------------
+
+    async def _insight(
+        self,
+        session: AsyncSession,
+        *,
+        type_: InsightType,
+        content: str,
+        priority: InsightPriority,
+        source: IntelSource,
+        dedupe_key: str,
+        confidence: float | None = None,
+        context: str | None = None,
+        segment_id: uuid.UUID | None = None,
+    ) -> None:
+        if self.persist:
+            await add_insight(
+                session,
+                company_id=self.company_id,
+                call_id=self.call_id,
+                type_=type_,
+                content=content,
+                priority=priority,
+                source=source,
+                dedupe_key=dedupe_key,
+                retention_days=self.retention_days,
+                confidence=confidence,
+                context=context,
+                segment_id=segment_id,
+            )
+            return
+        if dedupe_key in self._transient_keys:
+            return
+        self._transient_keys.add(dedupe_key)
+        hub.publish(
+            self.call_id,
+            "insight.created",
+            {
+                "id": str(uuid.uuid4()),
+                "type": type_.value,
+                "priority": priority.value,
+                "content": content[:1000],
+                "context": context[:500] if context else None,
+                "confidence": confidence,
+                "source": source.value,
+                "status": "ACTIVE",
+                "source_segment_id": None,
+                "created_at": None,
+                "transient": True,
+            },
+        )
+
+    def _transient_note(self, d: Detection, key: str, source: IntelSource) -> bool:
+        if f"note:{key}" in self._transient_keys:
+            return False
+        self._transient_keys.add(f"note:{key}")
+        hub.publish(
+            self.call_id,
+            "note.upserted",
+            {
+                "id": str(uuid.uuid4()),
+                "kind": d.kind.value,
+                "category": d.category.value if d.category else None,
+                "text": d.text[:1000],
+                "confidence": d.confidence,
+                "source": source.value,
+                "status": "SUGGESTED",
+                "source_segment_id": None,
+                "created_at": None,
+                "updated_at": None,
+                "transient": True,
+            },
+        )
+        return True
 
     def _set_degraded(self, reason: str) -> None:
         if not self.degraded:

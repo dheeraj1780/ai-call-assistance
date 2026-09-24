@@ -152,13 +152,22 @@ class CallNote(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
         CheckConstraint(
             "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)", name="confidence_range"
         ),
+        # A note belongs to a call or to a message conversation (communication session).
+        CheckConstraint("call_id IS NOT NULL OR session_id IS NOT NULL", name="has_source"),
         UniqueConstraint("company_id", "id"),
         UniqueConstraint("call_id", "dedupe_key"),
+        UniqueConstraint("session_id", "dedupe_key"),
         ForeignKeyConstraint(
             ["company_id", "call_id"],
             ["calls.company_id", "calls.id"],
             ondelete="CASCADE",
             name="fk_call_notes_call",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "session_id"],
+            ["communication_sessions.company_id", "communication_sessions.id"],
+            ondelete="CASCADE",
+            name="fk_call_notes_session",
         ),
         ForeignKeyConstraint(
             ["company_id", "contact_id"],
@@ -182,7 +191,8 @@ class CallNote(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
         Index("ix_call_notes_company_id_contact_id_kind", "company_id", "contact_id", "kind"),
     )
 
-    call_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    call_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     contact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     kind: Mapped[str] = mapped_column(String(24), nullable=False)
     category: Mapped[str | None] = mapped_column(String(24))

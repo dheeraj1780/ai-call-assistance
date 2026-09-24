@@ -1,5 +1,7 @@
 """Transcript retention (default 30 days, configurable per company).
 
+Communication messages (WhatsApp/Teams) and AI reply drafts follow the same retention.
+
 The sweep runs as a background job (hourly by default) and deletes transcript segments and
 live copilot insights whose ``expires_at`` has passed. These tables are RLS-protected; the only
 cross-tenant access the sweep has is a dedicated policy that allows DELETE of *expired* rows
@@ -32,10 +34,16 @@ async def purge_expired() -> dict[str, int]:
         segments = await session.execute(
             text("DELETE FROM transcript_segments WHERE expires_at < now()")
         )
+        drafts = await session.execute(text("DELETE FROM message_drafts WHERE expires_at < now()"))
+        messages = await session.execute(
+            text("DELETE FROM communication_messages WHERE expires_at < now()")
+        )
         await session.commit()
     result = {
         "transcript_segments": segments.rowcount or 0,  # type: ignore[attr-defined]
         "copilot_insights": insights.rowcount or 0,  # type: ignore[attr-defined]
+        "message_drafts": drafts.rowcount or 0,  # type: ignore[attr-defined]
+        "communication_messages": messages.rowcount or 0,  # type: ignore[attr-defined]
     }
     logger.info("retention_sweep", extra=result)
     return result

@@ -46,6 +46,24 @@ LIVE_CALL_STATUSES = frozenset(
 )
 
 
+class CallChannel(enum.StrEnum):
+    PHONE = "PHONE"
+    TEAMS = "TEAMS"
+
+
+class TranscriptPersistence(enum.StrEnum):
+    """Whether media-derived data (transcript, AI notes/insights) may be stored for a call.
+
+    PERSISTED: stored with retention (phone calls). TRANSIENT: processed in memory only.
+    PENDING_RECORDING_STATUS: a Teams call whose persistence depends on Microsoft's
+    updateRecordingStatus succeeding first; treated as TRANSIENT until confirmed.
+    """
+
+    PERSISTED = "PERSISTED"
+    TRANSIENT = "TRANSIENT"
+    PENDING_RECORDING_STATUS = "PENDING_RECORDING_STATUS"
+
+
 class CallOutcome(enum.StrEnum):
     INTERESTED = "INTERESTED"
     NOT_INTERESTED = "NOT_INTERESTED"
@@ -91,6 +109,14 @@ class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
         CheckConstraint(
             "duration_seconds IS NULL OR duration_seconds >= 0", name="duration_non_negative"
         ),
+        CheckConstraint(f"channel IN ({sql_in(CallChannel)})", name="channel_valid"),
+        CheckConstraint(
+            f"transcript_persistence IN ({sql_in(TranscriptPersistence)})",
+            name="transcript_persistence_valid",
+        ),
+        CheckConstraint(
+            "channel <> 'TEAMS' OR meeting_url IS NOT NULL", name="teams_requires_meeting_url"
+        ),
         UniqueConstraint("company_id", "id"),
         ForeignKeyConstraint(
             ["company_id", "contact_id"],
@@ -131,6 +157,20 @@ class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     provider: Mapped[str | None] = mapped_column(String(16))
     provider_call_id: Mapped[str | None] = mapped_column(String(128))
     telephony_error: Mapped[str | None] = mapped_column(String(64))
+    channel: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=CallChannel.PHONE.value,
+        server_default=CallChannel.PHONE.value,
+    )
+    # Teams meeting join link the copilot bot joins (TEAMS channel only).
+    meeting_url: Mapped[str | None] = mapped_column(String(2000))
+    transcript_persistence: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=TranscriptPersistence.PERSISTED.value,
+        server_default=TranscriptPersistence.PERSISTED.value,
+    )
 
     contact: Mapped[Contact] = relationship(
         Contact,

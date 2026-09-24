@@ -9,6 +9,21 @@ from app.calendar.models import CalendarConnection, CalendarEvent
 from app.calls.models import Call
 from app.common.models import Base
 from app.contacts.models import Contact, ContactNote
+from app.conversations.models import (
+    CommunicationEvent,
+    CommunicationMessage,
+    CommunicationParticipant,
+    CommunicationSession,
+    ContactIdentity,
+    MessageDraft,
+)
+from app.integrations.models import (
+    Integration,
+    IntegrationRoute,
+    IntegrationSubscription,
+    IntegrationUserConnection,
+    WebhookReceipt,
+)
 from app.intel.models import CallNote, CopilotInsight
 from app.jobs.models import Job
 from app.knowledge.models import KnowledgeChunk, KnowledgeDocument
@@ -32,18 +47,29 @@ __all__ = [
     "CallNote",
     "CallRoute",
     "CallSummary",
+    "CommunicationEvent",
+    "CommunicationMessage",
+    "CommunicationParticipant",
+    "CommunicationSession",
     "Company",
     "CompanyMember",
     "Contact",
+    "ContactIdentity",
     "ContactNote",
     "CopilotInsight",
     "FollowUpDraft",
+    "Integration",
+    "IntegrationRoute",
+    "IntegrationSubscription",
+    "IntegrationUserConnection",
     "Job",
     "KnowledgeChunk",
     "KnowledgeDocument",
+    "MessageDraft",
     "RefreshToken",
     "TelephonyWebhookEvent",
     "TimelineEvent",
     "TranscriptSegment",
     "User",
+    "WebhookReceipt",
 ]

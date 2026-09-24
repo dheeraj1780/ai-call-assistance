@@ -33,6 +33,8 @@ def record(
     note_id: uuid.UUID | None = None,
     call_id: uuid.UUID | None = None,
     action_item_id: uuid.UUID | None = None,
+    channel: str | None = None,
+    session_id: uuid.UUID | None = None,
 ) -> TimelineEvent:
     """Add an event to the caller's transaction."""
     event = TimelineEvent(
@@ -47,6 +49,8 @@ def record(
         note_id=note_id,
         call_id=call_id,
         action_item_id=action_item_id,
+        channel=channel,
+        session_id=session_id,
         # Set here (not DB now(), which is fixed per transaction) so several events written
         # in one transaction keep their order.
         occurred_at=datetime.now(UTC),

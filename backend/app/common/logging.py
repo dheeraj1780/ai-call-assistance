@@ -26,7 +26,20 @@ _CONTEXT_VARS = {
 _RESERVED = set(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {"message", "asctime"}
 
 # Defence in depth: keys that must never reach log output even if passed by mistake.
-_REDACTED_KEYS = {"password", "token", "access_token", "refresh_token", "secret", "authorization"}
+_REDACTED_KEYS = {
+    "password",
+    "token",
+    "access_token",
+    "refresh_token",
+    "secret",
+    "authorization",
+    "auth_token",
+    "app_secret",
+    "client_secret",
+    "verify_token",
+    "api_key",
+    "credentials",
+}
 
 
 class ContextFilter(logging.Filter):

@@ -22,7 +22,11 @@ from app.common.logging import configure_logging
 from app.common.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.common.rate_limit import client_ip
 from app.contacts.router import router as contacts_router
+from app.conversations.router import router as conversations_router
 from app.dashboard.router import router as dashboard_router
+from app.integrations.router import router as integrations_router
+from app.integrations.simulator import router as integrations_simulator_router
+from app.integrations.webhooks import router as integration_webhooks_router
 from app.jobs.service import worker_loop
 from app.knowledge.router import router as knowledge_router
 from app.live import session as live_sessions
@@ -95,6 +99,12 @@ def create_app() -> FastAPI:
     api.include_router(knowledge_router)
     api.include_router(postcall_router)
     api.include_router(dashboard_router)
+    # Webhooks and developer simulators first: their literal paths must win over
+    # /integrations/{slug}.
+    api.include_router(integration_webhooks_router)
+    api.include_router(integrations_simulator_router)
+    api.include_router(integrations_router)
+    api.include_router(conversations_router)
     app.include_router(api)
 
     @app.get("/health", tags=["health"], include_in_schema=False)
