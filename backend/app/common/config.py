@@ -109,7 +109,7 @@ class Settings(BaseSettings):
     frontend_base_url: str = "http://localhost:5173"
     google_client_id: str | None = None
     google_client_secret: SecretStr | None = None
-    # Key for encrypting OAuth refresh tokens at rest (Fernet-style urlsafe base64, 32 bytes).
+    # Secret for encrypting OAuth refresh tokens at rest (>= 32 chars; stretched to a Fernet key).
     token_encryption_key: SecretStr | None = None
 
     knowledge_max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
@@ -186,8 +186,13 @@ class Settings(BaseSettings):
                 )
             if self.telephony_webhook_secret is None:
                 raise ValueError("TELEPHONY_WEBHOOK_SECRET is required in production")
-            if self.token_encryption_key is None:
-                raise ValueError("TOKEN_ENCRYPTION_KEY is required in production")
+            if (
+                self.token_encryption_key is None
+                or len(self.token_encryption_key.get_secret_value()) < 32
+            ):
+                raise ValueError("TOKEN_ENCRYPTION_KEY (>= 32 chars) is required in production")
+            if len(self.telephony_webhook_secret.get_secret_value()) < 32:
+                raise ValueError("TELEPHONY_WEBHOOK_SECRET must be at least 32 characters")
         normalize_database_url(self.database_url)
         return self
 

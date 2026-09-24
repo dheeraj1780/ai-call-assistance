@@ -75,7 +75,13 @@ def create_engine(settings: Settings) -> AsyncEngine:
         **connect_args,
         "server_settings": {"statement_timeout": str(settings.db_statement_timeout_ms)},
     }
-    kwargs: dict[str, Any] = {"pool_pre_ping": True, "connect_args": connect_args}
+    # hide_parameters: DB error messages (which may end up in logged tracebacks) must never
+    # contain bound values such as transcript text or personal data.
+    kwargs: dict[str, Any] = {
+        "pool_pre_ping": True,
+        "connect_args": connect_args,
+        "hide_parameters": True,
+    }
     if settings.app_env == "test":
         # Each test may run on its own event loop; asyncpg connections are loop-bound.
         kwargs["poolclass"] = NullPool

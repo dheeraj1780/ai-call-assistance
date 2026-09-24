@@ -16,12 +16,12 @@ from app.common.config import get_settings
 def _fernet() -> Fernet:
     settings = get_settings()
     if settings.token_encryption_key is not None:
-        key = settings.token_encryption_key.get_secret_value().encode()
+        # Any high-entropy secret works: it is stretched into a valid Fernet key.
+        material = b"token-key:" + settings.token_encryption_key.get_secret_value().encode()
     else:
         # Development/test only (production requires TOKEN_ENCRYPTION_KEY, see config).
-        digest = hashlib.sha256(b"dev-token-key:" + settings.jwt_secret.get_secret_value().encode())
-        key = base64.urlsafe_b64encode(digest.digest())
-    return Fernet(key)
+        material = b"dev-token-key:" + settings.jwt_secret.get_secret_value().encode()
+    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(material).digest()))
 
 
 def encrypt(plaintext: str) -> str:

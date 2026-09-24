@@ -1,45 +1,39 @@
 # Security
 
-## Implemented in Phase 1
+Status labels: **TESTED** (automated test exists and passed), **WRITTEN** (test exists, not yet
+run against Postgres in this session), **UNIT** (DB-free test passed), **DESIGN** (implemented, no
+dedicated test).
 
-| Control | Implementation | Tested |
+## Controls
+
+| Area | Control | Status |
 |---|---|---|
-| Password hashing | Argon2id (m=19 MiB, t=2, p=1), rehash-on-login if params change | yes |
-| Password policy | 10–128 chars, not blank | yes |
-| User enumeration | identical 401 for unknown email / wrong password; dummy-hash timing equalisation | yes (response equality) |
-| Access tokens | HS256 JWT, 15 min, alg pinned, `iss`/`aud`/`typ`/`exp` required | yes (expired, bad sig, tampered, alg=none, wrong aud/iss/typ, missing claims) |
-| Session revocation | `sid` claim checked against `auth_sessions` on every request | yes (logout kills access token) |
-| Refresh tokens | opaque, hashed at rest, rotated, httpOnly/Secure/SameSite=Strict, path `/api/v1/auth` | yes |
-| Refresh theft detection | reuse after 10 s grace ⇒ session revoked + audit | yes |
-| CSRF | cookie endpoints need `X-CSRF-Protection: 1` + allowed Origin; all other endpoints use bearer tokens (not ambient) | yes |
-| Tenant isolation | tenant from token only, membership re-checked per request, `extra="forbid"` on updates, Postgres RLS (FORCE) | yes (API + DB level) |
-| Authorization | role dependency (`OWNER`/`ADMIN` for company updates) | yes |
-| Rate limiting | register/login/refresh per IP, login also per email | yes |
-| Input validation | Pydantic schemas with length limits; validation errors never echo input | yes |
-| Error hygiene | uniform envelope; unhandled errors → generic 500 with request id | yes |
-| Security headers | nosniff, DENY framing, no-referrer, CSP `default-src 'none'`, `no-store`, HSTS in production | yes |
-| CORS | explicit origin allow-list; wildcard rejected in production | yes |
-| Secrets | env vars only; `.env` git-ignored; production refuses placeholder/short JWT secret or insecure cookies | yes (settings validation) |
-| Logging | no bodies, no query strings, no headers; sensitive `extra` keys redacted | yes |
-| Audit log | register, login, failed login, logout, refresh-token reuse, company update (field names only) | yes |
-| DB role safety | startup check for superuser/BYPASSRLS | yes |
+| Passwords | Argon2id (OWASP params), rehash on login, 10–128 chars | TESTED (Phase 1) |
+| Sessions | 15-min JWT (alg pinned, iss/aud/typ/exp), server-side sessions, rotating hashed refresh tokens, reuse detection (10 s grace), logout revokes | TESTED (Phase 1) |
+| CSRF | Cookie endpoints need `X-CSRF-Protection` + allowed Origin; everything else uses bearer tokens | TESTED (Phase 1) |
+| Tenant isolation | Tenant from token only; membership re-checked per request; `extra="forbid"` bodies; FORCE RLS on every tenant table; composite tenant FKs | Phase 1 TESTED; CRM/calls/transcripts/notes/knowledge/post-call/calendar isolation tests WRITTEN |
+| Authorization | Owner/admin vs member rules (contacts, notes, calls, action items, agenda, notes review, knowledge management, company settings) | WRITTEN |
+| Webhooks | HMAC-SHA256 over `timestamp.body`, 5-min replay window, size cap, unique event id, ordered application | WRITTEN |
+| Media stream | Per-call expiring HMAC token; token only in URL query (never logged: access log records paths only) | WRITTEN |
+| Browser WebSocket | Access token in the first message (not URL), tenant check, 10 s auth timeout; no cookies → no cross-site WebSocket hijacking | WRITTEN |
+| Rate limiting | Auth endpoints per IP/email; user-triggered AI per company; client IP from configured trusted hop count (ADR-014) | TESTED (auth), UNIT (IP resolution) |
+| Input validation | Pydantic schemas with lengths, enums, aware datetimes, E.164-ish phones, tag/attribute caps | WRITTEN |
+| SQL injection | SQLAlchemy parameters everywhere; raw SQL only with bound parameters; LIKE wildcards escaped | WRITTEN (search test) |
+| XSS | React escapes output; no `dangerouslySetInnerHTML`; API CSP `default-src 'none'` | DESIGN |
+| SSRF | No user-controlled outbound URLs (provider endpoints are fixed constants) | DESIGN |
+| File uploads | Admin only; size cap; extension + magic-byte checks; DOCX zip-bomb limits; PDF page/text limits; originals not stored | WRITTEN |
+| Prompt injection | Data blocks, no model tools, schema-only outputs, server-side grounding checks | UNIT (delimiter test) + WRITTEN |
+| AI action boundary | AI cannot send messages, create calendar events or confirm tasks; drafts need humans; no send endpoint | WRITTEN (OpenAPI assertion) |
+| Secrets | Env vars only; production refuses placeholder/short secrets, missing webhook/encryption secrets, or mock providers unless explicitly allowed | UNIT |
+| Sensitive logging | No bodies/headers/query strings; sensitive `extra` keys redacted; SQL errors hide bound parameters; no transcript text in logs | TESTED (Phase 1) + DESIGN |
+| OAuth tokens | Refresh tokens Fernet-encrypted; signed short-lived OAuth state | WRITTEN |
+| DB role | Startup refuses superuser/BYPASSRLS role in production | TESTED (Phase 1) |
 
-## Known limitations / follow-ups
+## Known limitations
 
-- Rate limits are per process (ADR-011). Client IP comes from `TRUSTED_PROXY_HOPS`
-  (ADR-014); with the default `0` all clients behind a proxy share one bucket. The correct
-  hop count for Render is **NOT VERIFIED** until measured on a deployment. The per-email login
-  limit works independently.
-- Registration returns 409 for an existing email (standard UX trade-off; rate limited).
-- No MFA, email verification, password reset or account lockout yet (not in Phase 1 scope).
-- Failed logins for unknown emails are stored without a tenant and are visible only to
-  operators with direct DB access.
-- No CAPTCHA/bot protection on registration.
-
-## Future phases (planned, NOT IMPLEMENTED)
-
-- File upload validation (MIME sniffing, size limits) for the knowledge base.
-- Prompt-injection defences for knowledge documents and transcripts (`AI.md`).
-- Telephony webhook signature verification and idempotency (`TELEPHONY.md`).
-- Encryption of Google OAuth refresh tokens at rest.
-- Retention cleanup job for transcripts.
+- Rate limits and live sessions are per process (single instance).
+- Registration reveals whether an email exists (409).
+- No MFA, email verification, password reset, or account lockout.
+- WebSocket and webhook security depend on a real provider's signing scheme once integrated.
+- The Render hop count for client IPs is NOT VERIFIED until measured on a deployment.
+- No automated dependency/vulnerability scanning in CI (no CI configured).

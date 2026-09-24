@@ -129,3 +129,48 @@ uvicorn runs with `--no-proxy-headers`. The app takes the client address from
 client-controlled and ignored). Default `0` ignores the header entirely. Any missing, short
 or malformed header falls back to the TCP peer (stricter shared bucket, never bypassable).
 The hop count must be measured per deployment, never guessed.
+
+## ADR-015 — Single-process real-time pipeline (Accepted, 2026-09-24; IMPLEMENTED)
+
+Live sessions (STT streams, copilot state) and the browser event hub live in the API process.
+Simple and fast for a single instance. Scaling out requires sticky routing of provider media
+streams per call and a shared pub/sub for browser events. Browser reconnects resume via
+`seq`/`epoch`; an epoch change (process restart) forces a snapshot reload.
+
+## ADR-016 — Mock providers are first-class but fenced (Accepted; IMPLEMENTED)
+
+Telephony, STT, AI, embeddings and calendar each have a deterministic mock so the full workflow
+runs offline and in tests. Mocks never claim real-world success: calls record `provider = mock`,
+AI output is labelled, the simulator is a separate endpoint. Production startup refuses mock
+providers unless `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true` (staging only).
+
+## ADR-017 — Grounding is enforced in code, not only in prompts (Accepted; IMPLEMENTED)
+
+Agenda facts must cite provided record refs; post-call fields are CONFIRMED only with a verbatim
+transcript quote (otherwise INFERRED / NOT_DISCUSSED); knowledge answers must cite retrieved
+chunks or return "Information not found in company knowledge."; follow-up drafts are flagged
+when they contain figures not present in the call.
+
+## ADR-018 — Knowledge base keeps extracted text only (Accepted; IMPLEMENTED)
+
+Uploads are validated and converted to text chunks in the request; the original file is not
+stored (no object storage needed, less sensitive data retained). Embedding runs as a job.
+Default embeddings are a lexical hashing provider (dev quality); Voyage is the intended real
+provider (NOT LIVE VERIFIED). Changing embedding model requires re-embedding.
+
+## ADR-019 — Post-call processing is a background job with bounded retries (Accepted; IMPLEMENTED)
+
+Triggered by the terminal telephony event (deduplicated per call). AI failure marks the summary
+FAILED without touching the call; users can retry. Processing is idempotent once READY.
+
+## ADR-020 — A contact is the customer (Accepted; IMPLEMENTED)
+
+No separate "customer/account" entity in the MVP: a contact carries `organization`. An account
+entity can be added later without changing call/transcript tables (they reference contacts).
+
+## ADR-021 — Telephony provider shortlist (Proposed, 2026-09-24)
+
+Twilio excluded (no domestic Indian caller ID per its India guidelines). Evaluate Plivo first
+(separate tracks + India domestic routes, pending confirmation of streaming under media
+anchoring), Exotel second (India-native; mixed audio needs diarization). Data residency and
+consent REQUIRE LEGAL REVIEW before real calls. See `TELEPHONY.md`.

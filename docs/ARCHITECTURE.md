@@ -1,85 +1,73 @@
 # Architecture
 
-AI calling copilot for Indian MSMEs. The human salesperson leads the call; the AI assists
-before, during and after it. See `DECISIONS.md` for the reasoning behind each choice.
-
-## Current status (end of Phase 1)
-
-| Area | Status |
-|---|---|
-| Repository, tooling, configuration | IMPLEMENTED |
-| Auth (register/login/refresh/logout, `/me`) | IMPLEMENTED, tested |
-| Companies, membership, roles | IMPLEMENTED, tested |
-| Tenant isolation (app layer + Postgres RLS) | IMPLEMENTED, tested |
-| Structured logging, request IDs, error schema, audit log | IMPLEMENTED, tested |
-| React shell: login, register, dashboard | IMPLEMENTED, tested |
-| Render deployment (`render.yaml`) | WRITTEN, NOT YET DEPLOYED |
-| Contacts, calls, agenda, copilot, knowledge, calendar | NOT IMPLEMENTED (Phases 2–7) |
-| Telephony | NOT IMPLEMENTED — feasibility spike first (Phase 4) |
+AI calling copilot for Indian MSMEs. The salesperson leads the call; the AI assists before,
+during and after it. Modular monolith (ADR-001). See `DECISIONS.md` for the reasoning,
+`../PROJECT_STATUS.md` for the current state and `../FINAL_MVP_AUDIT.md` for verification status.
 
 ## Shape
 
 ```
-Browser (React SPA)
-   │  same-origin /api/*  (Vite proxy in dev, Render static-site rewrite in prod)
-   ▼
-FastAPI (modular monolith)
-   ├── middleware: request ID → access log → security headers → error envelope
-   ├── routers  (/api/v1/…)
-   ├── services (use cases, transactions, audit)
-   ├── repositories (tenant-scoped queries)
-   └── SQLAlchemy async session ── sets app.company_id / app.user_id per transaction
-   ▼
-PostgreSQL 16 + pgvector  (Row-Level Security FORCE'd on tenant tables)
+Browser (React SPA) ── REST /api/v1 ──────────────┐
+        └── WebSocket /calls/{id}/live/ws ───────┐ │
+                                                 ▼ ▼
+                                        FastAPI (single process)
+   routers → services → repositories → SQLAlchemy (tenant context per transaction)
+        │            │                        │
+        │            ├── AIGateway ──► AIProvider (Claude | mock)
+        │            ├── EmbeddingProvider (hashing | Voyage)
+        │            ├── CalendarProvider (Google | mock)
+        │            └── jobs worker (in-process): knowledge embedding, post-call, retention
+        │
+        ├── /webhooks/telephony/{provider}  ◄── provider status callbacks (signed)
+        └── /telephony/media/{provider}/{call} ◄── provider media fork (token)
+                 │
+                 ▼
+        LiveSession ──► SpeechToTextProvider ──► final segments ──► DB (expires_at)
+                 │                                              └──► LiveHub ──► browsers
+                 └──► CopilotEngine (detectors, agenda, knowledge, budgeted LLM)
+                                                 ▼
+                          PostgreSQL 16 + pgvector (RLS FORCE'd on all tenant tables)
 ```
 
-Future external integrations (behind interfaces, none implemented yet): telephony provider,
-speech-to-text, LLM (Claude), embeddings, Google Calendar.
+## Modules (`backend/app`)
 
-## Backend layout
+| Module | Responsibility |
+|---|---|
+| `auth`, `users`, `tenants`, `audit` | Phase 1 foundation (sessions, rotating refresh tokens, RLS tenant context, audit log) |
+| `contacts` | Contacts (customers/leads — a contact is the customer; `organization` holds their business, ADR-020) and free-form notes |
+| `timeline` | Stored, tenant-scoped customer timeline events |
+| `calls` | Call records and manual lifecycle; telephony fields |
+| `agendas`, `call_prep` | Agenda items (status precedence), AI agenda suggestion, preparation context |
+| `calendar` | `CalendarProvider`, OAuth, confirmed events |
+| `telephony` | `TelephonyProvider`, webhooks, media ingest, lifecycle, simulator |
+| `speech` | `SpeechToTextProvider` |
+| `live` | `LiveSession` pipeline, transcript segments, `LiveHub`, live API/WebSocket |
+| `copilot` | Deterministic detectors + `CopilotEngine` |
+| `intel` | Copilot insights and structured call notes (+ human review) |
+| `knowledge` | Upload/extraction/chunking, embedding job, retrieval, grounded answers |
+| `postcall` | Post-call analysis job, summary, follow-up drafts |
+| `dashboard` | Dashboard read model |
+| `ai` | Provider interface, Claude/mock providers, gateway, embeddings, prompt safety |
+| `jobs` | Postgres job queue + worker |
+| `privacy` | Transcript retention sweep |
+| `common` | Config, DB/tenant context, errors, logging, middleware, rate limiting, crypto |
 
-```
-backend/
-  app/
-    main.py              app factory, middleware, routers, health endpoints
-    common/              config, db (engine/session/tenant context), logging, middleware,
-                         errors, rate_limit, models base, shared schemas
-    auth/                passwords, tokens, sessions/refresh tokens, service, router, deps
-    users/               user model, /me
-    tenants/             companies, memberships, repository, router
-    audit/               audit log model + helpers
-  alembic/               migrations (0001_foundation)
-  tests/                 real-Postgres tests
-```
+## Real-time reliability rules
 
-Module rule: routers are thin; services own transactions and call `session.commit()`
-explicitly; repositories take the tenant id explicitly. Domain code must not import vendor
-SDKs.
+- The provider owns the phone call; our state follows its webhooks (browser never authoritative).
+- Webhooks are verified, deduplicated and applied in lifecycle order only.
+- STT failures are per track, with bounded re-open; AI failures mark the copilot "degraded".
+- Browser WebSocket disconnects only end the subscription; reconnect resumes by `seq`/`epoch`.
+- **Single process** (ADR-015): live sessions and the hub are in memory. Scaling out needs a
+  shared pub/sub and sticky routing of the media stream — not built.
 
-## Request lifecycle (authenticated)
+## Frontend (`frontend/src`)
 
-1. `RequestContextMiddleware` assigns/validates `X-Request-ID`, adds security headers,
-   catches unhandled errors (generic 500 envelope) and writes one access-log line
-   (method, path without query string, status, latency, request/user/company ids).
-2. `get_principal` verifies the JWT, binds the tenant context to the DB session, and in one
-   query checks: membership for (user, company), user active, session not revoked/expired.
-3. The handler/service queries through repositories; RLS filters anything that slips
-   through.
-4. Services commit explicitly; the session dependency rolls back anything uncommitted.
+Pages: Login, Register, Dashboard, Contacts, Contact detail (timeline/notes/calls/tasks), Add/Edit
+contact, Plan call, Call preparation, Live call, Call detail (record + post-call summary + drafts +
+calendar follow-up), Call history, Action items, Knowledge base, Calendar, Settings.
+`lib/useLiveCall.ts` manages snapshot + WebSocket resume; `lib/live.ts` is a pure event reducer.
 
-## Frontend layout
+## Deployment
 
-```
-frontend/src/
-  lib/api.ts          fetch wrapper: in-memory access token, refresh-on-401, error parsing,
-                      refresh coalescing (in-tab) + Web Locks (cross-tab)
-  auth/               AuthProvider (session restore via refresh cookie), useAuth, guards
-  pages/              LoginPage, RegisterPage, DashboardPage
-  components/         AppLayout, small UI primitives
-```
-
-## Deployment (Render)
-
-See `render.yaml` and `DEVELOPMENT.md → Deploying to Render`. API = Render Web Service
-(migrations via `preDeployCommand`), frontend = Render Static Site with `/api/*` rewrite to
-the API, database = Render PostgreSQL. No background worker yet.
+Not deployed. See `DEVELOPMENT.md` (Render staging) and `render.yaml`.

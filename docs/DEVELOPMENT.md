@@ -65,6 +65,29 @@ npm run dev                   # http://localhost:5173, proxies /api to 127.0.0.1
 npm test && npm run lint && npm run typecheck && npm run build
 ```
 
+## Running the whole product locally (offline, mock providers)
+
+1. Start Postgres and the API (`uv run uvicorn app.main:app --reload --port 8000`) and the
+   frontend (`npm run dev`). The in-process job worker starts with the API.
+2. Register, then in **Settings** add your phone number (needed to start calls).
+3. **Knowledge**: upload a TXT/PDF/DOCX product guide (admin).
+4. **Contacts → Add contact** (with a phone number) → **Prepare call** → objective →
+   **Suggest with AI** → edit → **Save agenda** → **Start call**.
+5. On the live screen press **Simulate conversation (mock)**: the mock telephony provider plays a
+   scripted conversation through webhooks, the media stream and mock STT. Watch the transcript,
+   agenda tracking, copilot cards and notes; review/edit notes.
+6. When the call completes, open **View summary**: grounded summary, AI action items to confirm,
+   follow-up drafts to edit/approve/copy (never sent), and schedule a calendar follow-up (mock
+   calendar unless Google is configured).
+7. The contact timeline and dashboard show the whole relationship history.
+
+Real providers: set `AI_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`, `EMBEDDING_PROVIDER=voyage` +
+`VOYAGE_API_KEY`, `CALENDAR_PROVIDER=google` + Google OAuth client (redirect URI
+`{PUBLIC_BASE_URL}/api/v1/calendar/oauth/callback`). Telephony/STT have no real adapter yet.
+
+Tests: `uv run pytest` (needs `TEST_DATABASE_URL`), DB-free subset:
+`uv run pytest --noconftest tests/unit`.
+
 ## Environments
 
 `APP_ENV` = `development` | `test` | `production`. Production enforces secure cookies, a
