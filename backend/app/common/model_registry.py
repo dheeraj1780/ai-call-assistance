@@ -13,6 +13,7 @@ from app.intel.models import CallNote, CopilotInsight
 from app.jobs.models import Job
 from app.knowledge.models import KnowledgeChunk, KnowledgeDocument
 from app.live.models import TranscriptSegment
+from app.postcall.models import CallSummary, FollowUpDraft
 from app.telephony.models import CallRoute, TelephonyWebhookEvent
 from app.tenants.models import Company, CompanyMember
 from app.timeline.models import TimelineEvent
@@ -30,11 +31,13 @@ __all__ = [
     "Call",
     "CallNote",
     "CallRoute",
+    "CallSummary",
     "Company",
     "CompanyMember",
     "Contact",
     "ContactNote",
     "CopilotInsight",
+    "FollowUpDraft",
     "Job",
     "KnowledgeChunk",
     "KnowledgeDocument",

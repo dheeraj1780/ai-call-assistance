@@ -48,5 +48,7 @@ class CallOut(APIModel):
     outcome: CallOutcome | None
     outcome_notes: str | None
     next_step: str | None
+    provider: str | None = None
+    telephony_error: str | None = None
     created_at: datetime
     updated_at: datetime

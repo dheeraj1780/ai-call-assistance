@@ -140,6 +140,7 @@ export interface Call {
   outcome: CallOutcome | null;
   outcome_notes: string | null;
   next_step: string | null;
+  provider?: string | null;
   created_at: string;
   updated_at: string;
 }

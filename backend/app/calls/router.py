@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Request, status
+from pydantic import AwareDatetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import Principal, get_principal
@@ -32,12 +33,19 @@ async def list_calls(
     contact_id: uuid.UUID | None = None,
     status_filter: CallStatus | None = Query(default=None, alias="status"),
     user_id: uuid.UUID | None = None,
+    since: AwareDatetime | None = Query(default=None, alias="from"),
+    until: AwareDatetime | None = Query(default=None, alias="to"),
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> Page[CallOut]:
     repo = CallRepository(session)
     stmt = repo.search(
-        principal.company_id, contact_id=contact_id, status=status_filter, user_id=user_id
+        principal.company_id,
+        contact_id=contact_id,
+        status=status_filter,
+        user_id=user_id,
+        since=since,
+        until=until,
     )
     rows, total = await repo.page(stmt, limit=page.limit, offset=page.offset)
     return Page(

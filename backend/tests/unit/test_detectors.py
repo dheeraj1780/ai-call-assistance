@@ -91,3 +91,12 @@ def test_chunking_keeps_all_text() -> None:
     assert all(len(c) <= 1200 for c in chunks)
     for i in range(10):
         assert any(f"Paragraph {i}." in c for c in chunks)
+
+
+def test_figure_warnings_flag_invented_numbers() -> None:
+    from app.postcall.service import figure_warnings
+
+    source = "our budget is around 2 lakh and we have 5 branches"
+    assert figure_warnings("Budget of 2 lakh for 5 branches noted.", source) == []
+    warnings = figure_warnings("Special price Rs 49,999 with 20% off", source)
+    assert len(warnings) == 2

@@ -201,6 +201,21 @@ async def confirm_item(
     if item.confirmed_at is None:  # idempotent
         item.confirmed_at = datetime.now(UTC)
         item.confirmed_by_user_id = principal.user_id
+        if item.contact_id:
+            timeline.record(
+                session,
+                company_id=principal.company_id,
+                contact_id=item.contact_id,
+                category=_category(item.kind),
+                event_type=TimelineEventType.ACTION_ITEM_CREATED,
+                summary=(
+                    f"{_KIND_LABEL[ActionItemKind(item.kind)]} (AI suggestion, confirmed): "
+                    f"{item.title}"
+                ),
+                actor_user_id=principal.user_id,
+                action_item_id=item.id,
+                call_id=item.call_id,
+            )
         audit.record(
             session,
             "action_item.confirmed",

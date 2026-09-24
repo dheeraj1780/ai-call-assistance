@@ -5,6 +5,7 @@ Only data already stored for this tenant is returned; nothing is inferred here.
 
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.action_items.models import ActionItemStatus
@@ -21,6 +22,8 @@ from app.calls.service import get_call
 from app.common.errors import NotFoundError
 from app.contacts.repository import ContactNoteRepository, ContactRepository
 from app.contacts.schemas import ContactOut, NoteOut
+from app.intel.models import CallNote, NoteKind, NoteStatus
+from app.postcall.models import CallSummary
 from app.timeline import service as timeline
 from app.timeline.schemas import TimelineEventOut
 
@@ -40,17 +43,42 @@ async def _previous_calls(session: AsyncSession, principal: Principal, call: Cal
 async def _known_items(
     session: AsyncSession, principal: Principal, call: Call
 ) -> tuple[list[KnownItem], list[KnownItem]]:
-    """Requirements/objections captured on earlier calls with this contact.
-
-    Populated once call intelligence exists (live copilot phase)."""
-    return [], []
+    """Requirements/objections captured on earlier calls with this contact (human-reviewed
+    notes first; unreviewed suggestions are labelled as such)."""
+    rows = await session.scalars(
+        select(CallNote)
+        .where(
+            CallNote.company_id == principal.company_id,
+            CallNote.contact_id == call.contact_id,
+            CallNote.call_id != call.id,
+            CallNote.kind.in_([NoteKind.REQUIREMENT.value, NoteKind.OBJECTION.value]),
+            CallNote.status != NoteStatus.REJECTED.value,
+        )
+        .order_by(CallNote.created_at.desc())
+        .limit(40)
+    )
+    reqs: list[KnownItem] = []
+    objections: list[KnownItem] = []
+    for n in rows:
+        item = KnownItem(kind=n.kind, text=n.text, status=n.status, call_id=n.call_id)
+        (reqs if n.kind == NoteKind.REQUIREMENT else objections).append(item)
+    return reqs[:10], objections[:10]
 
 
 async def _summaries(
     session: AsyncSession, principal: Principal, calls: list[Call]
 ) -> dict[str, str]:
-    """Post-call summaries of earlier calls (populated once post-call processing exists)."""
-    return {}
+    """Post-call summaries of earlier calls."""
+    if not calls:
+        return {}
+    rows = await session.execute(
+        select(CallSummary.call_id, CallSummary.summary).where(
+            CallSummary.company_id == principal.company_id,
+            CallSummary.call_id.in_([c.id for c in calls]),
+            CallSummary.summary.is_not(None),
+        )
+    )
+    return {str(call_id): summary for call_id, summary in rows}
 
 
 async def gather_records(

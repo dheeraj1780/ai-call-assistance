@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router";
 
 import { ActionItemList, AddActionItemForm } from "../components/ActionItemList";
+import { PostCallPanel } from "../components/PostCallPanel";
 import { ScheduleEventForm } from "../components/ScheduleEventForm";
 import { Badge, Card, QueryState, SelectField, TextArea } from "../components/common";
 import { Alert, Button } from "../components/ui";
@@ -102,6 +103,10 @@ export function CallDetailPage() {
               <Field name="Duration" value={formatDuration(call.data.duration_seconds)} />
             </dl>
           </Card>
+
+          {["COMPLETED", "NO_ANSWER", "FAILED", "CANCELLED"].includes(call.data.status) && call.data.provider ? (
+            <PostCallPanel callId={id} />
+          ) : null}
 
           {call.data.status === "COMPLETED" ? <OutcomeCard call={call.data} onSave={(b) => update.mutate(b)} saving={update.isPending} /> : null}
 

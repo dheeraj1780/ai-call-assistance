@@ -30,8 +30,8 @@ This file is the hand-off point for any future session. Keep it current.
 | 10–13 | Live copilot (detectors + budgeted LLM pass), agenda tracking, requirements, objections | CODE COMPLETE | detector unit tests 36/36; DB tests NOT YET RUN |
 | 14–15 | Knowledge base (PDF/DOCX/TXT, chunking, pgvector) + live retrieval | CODE COMPLETE | DB tests NOT YET RUN; Voyage embeddings NOT VERIFIED |
 | 16 | Structured live notes with human review | CODE COMPLETE | DB tests NOT YET RUN |
-| 17–21 | Post-call, action items (AI), follow-up drafts, history, timeline integration | NOT STARTED | |
-| 22 | Dashboard | NOT STARTED | |
+| 17–21 | Post-call (grounded summary, AI action items, follow-up drafts, timeline), call history | CODE COMPLETE | frontend 37/37; DB tests NOT YET RUN |
+| 22 | Dashboard | CODE COMPLETE | DB test NOT YET RUN |
 | 23–27 | AI safety, retention, security, reliability, cost | NOT STARTED | |
 | 28–32 | Tests, UI polish, E2E journey, docs, code quality | NOT STARTED | |
 

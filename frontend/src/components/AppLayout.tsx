@@ -7,9 +7,11 @@ import { Button } from "./ui";
 const NAV = [
   { to: "/", label: "Dashboard" },
   { to: "/contacts", label: "Contacts" },
+  { to: "/calls", label: "Calls" },
   { to: "/action-items", label: "Action items" },
   { to: "/knowledge", label: "Knowledge" },
   { to: "/calendar", label: "Calendar" },
+  { to: "/settings", label: "Settings" },
 ];
 
 export function AppLayout() {

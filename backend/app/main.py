@@ -22,10 +22,12 @@ from app.common.logging import configure_logging
 from app.common.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.common.rate_limit import client_ip
 from app.contacts.router import router as contacts_router
+from app.dashboard.router import router as dashboard_router
 from app.jobs.service import worker_loop
 from app.knowledge.router import router as knowledge_router
 from app.live import session as live_sessions
 from app.live.router import router as live_router
+from app.postcall.router import router as postcall_router
 from app.telephony.router import router as telephony_router
 from app.tenants.router import router as tenants_router
 from app.users.router import router as users_router
@@ -91,6 +93,8 @@ def create_app() -> FastAPI:
     api.include_router(telephony_router)
     api.include_router(live_router)
     api.include_router(knowledge_router)
+    api.include_router(postcall_router)
+    api.include_router(dashboard_router)
     app.include_router(api)
 
     @app.get("/health", tags=["health"], include_in_schema=False)

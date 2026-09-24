@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Select
+from sqlalchemy import Select, func
 from sqlalchemy.orm import joinedload
 
 from app.calls.models import Call, CallStatus
@@ -20,8 +21,15 @@ class CallRepository(TenantRepository[Call]):
         contact_id: uuid.UUID | None,
         status: CallStatus | None,
         user_id: uuid.UUID | None,
+        since: datetime | None = None,
+        until: datetime | None = None,
     ) -> Select[tuple[Call]]:
         stmt = self.scoped(company_id)
+        when = func.coalesce(Call.started_at, Call.scheduled_at, Call.created_at)
+        if since:
+            stmt = stmt.where(when >= since)
+        if until:
+            stmt = stmt.where(when < until)
         if contact_id:
             stmt = stmt.where(Call.contact_id == contact_id)
         if status:
