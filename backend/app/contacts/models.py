@@ -12,7 +12,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.common.models import (
@@ -37,10 +37,25 @@ class ContactStatus(enum.StrEnum):
     LOST = "LOST"
 
 
+class ContactSource(enum.StrEnum):
+    MANUAL = "MANUAL"
+    REFERRAL = "REFERRAL"
+    WEBSITE = "WEBSITE"
+    INBOUND_CALL = "INBOUND_CALL"
+    EVENT = "EVENT"
+    IMPORT = "IMPORT"
+    OTHER = "OTHER"
+
+
+MAX_ATTRIBUTES = 20
+
+
 class Contact(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "contacts"
     __table_args__ = (
         CheckConstraint(f"status IN ({sql_in(ContactStatus)})", name="status_valid"),
+        CheckConstraint(f"source IN ({sql_in(ContactSource)})", name="source_valid"),
+        CheckConstraint("jsonb_typeof(attributes) = 'object'", name="attributes_object"),
         CheckConstraint("length(btrim(name)) > 0", name="name_not_blank"),
         CheckConstraint(f"cardinality(tags) <= {MAX_TAGS}", name="tags_max"),
         CheckConstraint("email IS NULL OR email = lower(email)", name="email_lowercase"),
@@ -65,13 +80,26 @@ class Contact(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     email: Mapped[str | None] = mapped_column(String(320))
     designation: Mapped[str | None] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=ContactStatus.NEW.value,
-        server_default=ContactStatus.NEW.value
+        String(16),
+        nullable=False,
+        default=ContactStatus.NEW.value,
+        server_default=ContactStatus.NEW.value,
     )
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(String(40)), nullable=False, default=list, server_default=text("'{}'")
     )
     notes: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=ContactSource.MANUAL.value,
+        server_default=ContactSource.MANUAL.value,
+    )
+    # Small display-only key/value extras (e.g. {"branches": "5"}); queryable facts belong in
+    # real columns. Max 20 short string pairs (validated in the API schema).
+    attributes: Mapped[dict[str, str]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
 

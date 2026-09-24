@@ -24,7 +24,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.common.models import Base, CreatedAtMixin, TenantScopedMixin, UUIDPrimaryKeyMixin, sql_in
 
 
-
 class TimelineCategory(enum.StrEnum):
     CONTACT = "CONTACT"
     STATUS_CHANGE = "STATUS_CHANGE"
@@ -37,6 +36,7 @@ class TimelineCategory(enum.StrEnum):
 
 class TimelineEventType(enum.StrEnum):
     CONTACT_CREATED = "CONTACT_CREATED"
+    CONTACT_UPDATED = "CONTACT_UPDATED"
     STATUS_CHANGED = "STATUS_CHANGED"
     NOTE_ADDED = "NOTE_ADDED"
     CALL_PLANNED = "CALL_PLANNED"

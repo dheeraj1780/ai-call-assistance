@@ -26,11 +26,24 @@ MAX_OBJECTIVE_LENGTH = 2_000
 
 class CallStatus(enum.StrEnum):
     PLANNED = "PLANNED"
-    IN_PROGRESS = "IN_PROGRESS"
+    # Telephony lifecycle (set from provider webhooks; see app/telephony).
+    INITIATED = "INITIATED"
+    RINGING = "RINGING"
+    CONNECTED = "CONNECTED"
+    ACTIVE = "ACTIVE"
+    # Terminal
     COMPLETED = "COMPLETED"
     NO_ANSWER = "NO_ANSWER"
     CANCELLED = "CANCELLED"
     FAILED = "FAILED"
+
+
+TERMINAL_CALL_STATUSES = frozenset(
+    {CallStatus.COMPLETED, CallStatus.NO_ANSWER, CallStatus.CANCELLED, CallStatus.FAILED}
+)
+LIVE_CALL_STATUSES = frozenset(
+    {CallStatus.INITIATED, CallStatus.RINGING, CallStatus.CONNECTED, CallStatus.ACTIVE}
+)
 
 
 class CallOutcome(enum.StrEnum):
@@ -43,14 +56,16 @@ class CallOutcome(enum.StrEnum):
     NO_DECISION = "NO_DECISION"
 
 
-# Allowed manual status transitions. Terminal states cannot change.
+# Allowed MANUAL status transitions (calls logged by hand, e.g. made from a personal phone).
+# Provider-driven transitions are handled by app/telephony with ordering rules.
 CALL_TRANSITIONS: dict[CallStatus, frozenset[CallStatus]] = {
     CallStatus.PLANNED: frozenset(
-        {CallStatus.IN_PROGRESS, CallStatus.COMPLETED, CallStatus.NO_ANSWER, CallStatus.CANCELLED}
+        {CallStatus.ACTIVE, CallStatus.COMPLETED, CallStatus.NO_ANSWER, CallStatus.CANCELLED}
     ),
-    CallStatus.IN_PROGRESS: frozenset(
-        {CallStatus.COMPLETED, CallStatus.NO_ANSWER, CallStatus.FAILED}
-    ),
+    CallStatus.ACTIVE: frozenset({CallStatus.COMPLETED, CallStatus.NO_ANSWER, CallStatus.FAILED}),
+    CallStatus.INITIATED: frozenset({CallStatus.CANCELLED}),
+    CallStatus.RINGING: frozenset({CallStatus.CANCELLED}),
+    CallStatus.CONNECTED: frozenset(),
     CallStatus.COMPLETED: frozenset(),
     CallStatus.NO_ANSWER: frozenset(),
     CallStatus.CANCELLED: frozenset(),
@@ -62,7 +77,9 @@ class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     __tablename__ = "calls"
     __table_args__ = (
         CheckConstraint(f"status IN ({sql_in(CallStatus)})", name="status_valid"),
-        CheckConstraint(f"outcome IS NULL OR outcome IN ({sql_in(CallOutcome)})", name="outcome_valid"),
+        CheckConstraint(
+            f"outcome IS NULL OR outcome IN ({sql_in(CallOutcome)})", name="outcome_valid"
+        ),
         CheckConstraint(
             f"objective IS NULL OR length(objective) <= {MAX_OBJECTIVE_LENGTH}",
             name="objective_length",
@@ -96,9 +113,12 @@ class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     # The salesperson responsible for the call.
     user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     objective: Mapped[str | None] = mapped_column(Text)
+    desired_outcome: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=CallStatus.PLANNED.value,
-        server_default=CallStatus.PLANNED.value
+        String(16),
+        nullable=False,
+        default=CallStatus.PLANNED.value,
+        server_default=CallStatus.PLANNED.value,
     )
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

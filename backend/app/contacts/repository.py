@@ -1,11 +1,12 @@
 import uuid
+from typing import Any
 
-from sqlalchemy import Select, or_
+from sqlalchemy import Select, UnaryExpression, or_
 
 from app.common.repository import TenantRepository, like_pattern
 from app.contacts.models import Contact, ContactNote, ContactStatus
 
-CONTACT_SORTS = {
+CONTACT_SORTS: dict[str, tuple[UnaryExpression[Any], ...]] = {
     "-updated_at": (Contact.updated_at.desc(), Contact.id.desc()),
     "-created_at": (Contact.created_at.desc(), Contact.id.desc()),
     "name": (Contact.name.asc(), Contact.id.asc()),
@@ -48,7 +49,9 @@ class ContactRepository(TenantRepository[Contact]):
 class ContactNoteRepository(TenantRepository[ContactNote]):
     model = ContactNote
 
-    def for_contact(self, company_id: uuid.UUID, contact_id: uuid.UUID) -> Select[tuple[ContactNote]]:
+    def for_contact(
+        self, company_id: uuid.UUID, contact_id: uuid.UUID
+    ) -> Select[tuple[ContactNote]]:
         return (
             self.scoped(company_id)
             .where(ContactNote.contact_id == contact_id)

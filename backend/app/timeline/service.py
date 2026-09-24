@@ -103,9 +103,7 @@ async def list_events(
                 and_(TimelineEvent.occurred_at == at, TimelineEvent.id < event_id),
             )
         )
-    stmt = stmt.order_by(TimelineEvent.occurred_at.desc(), TimelineEvent.id.desc()).limit(
-        limit + 1
-    )
+    stmt = stmt.order_by(TimelineEvent.occurred_at.desc(), TimelineEvent.id.desc()).limit(limit + 1)
     rows = list((await session.scalars(stmt)).all())
     next_cursor = encode_cursor(rows[limit - 1]) if len(rows) > limit else None
     return rows[:limit], next_cursor

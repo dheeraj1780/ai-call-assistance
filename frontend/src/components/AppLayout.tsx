@@ -4,6 +4,12 @@ import { NavLink, Outlet } from "react-router";
 import { useAuth } from "../auth/context";
 import { Button } from "./ui";
 
+const NAV = [
+  { to: "/", label: "Dashboard" },
+  { to: "/contacts", label: "Contacts" },
+  { to: "/action-items", label: "Action items" },
+];
+
 export function AppLayout() {
   const { session, logout } = useAuth();
   const [signingOut, setSigningOut] = useState(false);
@@ -16,16 +22,19 @@ export function AppLayout() {
             <span className="truncate text-sm font-semibold text-slate-900">
               {session?.company.name}
             </span>
-            <nav className="flex gap-4 text-sm">
-              <NavLink
-                to="/"
-                end
-                className={({ isActive }) =>
-                  isActive ? "font-medium text-slate-900" : "text-slate-500 hover:text-slate-900"
-                }
-              >
-                Dashboard
-              </NavLink>
+            <nav className="flex gap-4 overflow-x-auto text-sm" aria-label="Main">
+              {NAV.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === "/"}
+                  className={({ isActive }) =>
+                    isActive ? "font-medium text-slate-900" : "text-slate-500 hover:text-slate-900"
+                  }
+                >
+                  {item.label}
+                </NavLink>
+              ))}
             </nav>
           </div>
           <div className="flex items-center gap-3">

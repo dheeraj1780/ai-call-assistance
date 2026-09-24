@@ -6,6 +6,12 @@ import { vi } from "vitest";
 
 import { AuthContext, type AuthContextValue } from "../auth/context";
 
+export const TEST_SESSION = {
+  user: { id: "u1", email: "priya@example.com", full_name: "Priya Sharma", phone: null },
+  company: { id: "c1", name: "Sharma Traders" },
+  role: "OWNER" as const,
+};
+
 export function fakeAuth(overrides: Partial<AuthContextValue> = {}): AuthContextValue {
   return {
     status: "anonymous",
@@ -20,13 +26,17 @@ export function fakeAuth(overrides: Partial<AuthContextValue> = {}): AuthContext
 /** Renders `element` at `path`, with marker routes for "/" and "/login" to observe redirects. */
 export function renderWithAuth(
   element: ReactElement,
-  { auth = fakeAuth(), path = "/login" }: { auth?: AuthContextValue; path?: string } = {},
+  {
+    auth = fakeAuth(),
+    path = "/login",
+    url,
+  }: { auth?: AuthContextValue; path?: string; url?: string } = {},
 ) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider value={auth}>
-        <MemoryRouter initialEntries={[path]}>
+        <MemoryRouter initialEntries={[url ?? path]}>
           <Routes>
             <Route path={path} element={element} />
             {path !== "/" ? <Route path="/" element={<div>HOME PAGE</div>} /> : null}

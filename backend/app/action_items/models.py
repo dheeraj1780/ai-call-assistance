@@ -100,8 +100,10 @@ class ActionItem(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     contact_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     call_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     kind: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=ActionItemKind.TASK.value,
-        server_default=ActionItemKind.TASK.value
+        String(16),
+        nullable=False,
+        default=ActionItemKind.TASK.value,
+        server_default=ActionItemKind.TASK.value,
     )
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)

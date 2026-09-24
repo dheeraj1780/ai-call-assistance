@@ -32,7 +32,7 @@ from app.tenants.membership import ensure_member
 from app.timeline import service as timeline
 from app.timeline.models import TimelineCategory, TimelineEventType
 
-_PLANNING_FIELDS = {"objective", "scheduled_at"}
+_PLANNING_FIELDS = {"objective", "desired_outcome", "scheduled_at"}
 _NON_NULLABLE = {"status"}
 
 
@@ -62,6 +62,7 @@ async def create_call(
         contact_id=contact.id,
         user_id=user_id,
         objective=data.objective,
+        desired_outcome=data.desired_outcome,
         scheduled_at=data.scheduled_at,
         status=CallStatus.PLANNED.value,
     )
@@ -102,9 +103,9 @@ def _apply_status(call: Call, new_status: CallStatus, now: datetime) -> None:
             f"Cannot change call status from {current.value} to {new_status.value}",
             code="invalid_status_transition",
         )
-    if new_status == CallStatus.IN_PROGRESS:
+    if new_status == CallStatus.ACTIVE:
         call.started_at = now
-    elif current == CallStatus.IN_PROGRESS:
+    elif current == CallStatus.ACTIVE:
         call.ended_at = now
         if call.started_at is not None:
             call.duration_seconds = max(0, int((now - call.started_at).total_seconds()))

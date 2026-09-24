@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 def like_pattern(term: str) -> str:
     """Escape LIKE wildcards in user input and wrap it for a substring match."""
-    escaped = term.replace("\\", "\\\\").replace("%", "\%").replace("_", "\_")
+    escaped = term.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
     return f"%{escaped}%"
 
 
@@ -30,9 +30,7 @@ class TenantRepository[M]:
         )
         return result
 
-    async def page(
-        self, stmt: Select[tuple[M]], *, limit: int, offset: int
-    ) -> tuple[list[M], int]:
+    async def page(self, stmt: Select[tuple[M]], *, limit: int, offset: int) -> tuple[list[M], int]:
         total = await self.session.scalar(select(func.count()).select_from(stmt.subquery()))
         rows = (await self.session.scalars(stmt.limit(limit).offset(offset))).unique().all()
         return list(rows), total or 0

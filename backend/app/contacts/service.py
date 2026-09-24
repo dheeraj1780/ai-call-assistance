@@ -8,6 +8,7 @@ Authorization (MVP):
 - Editing/deleting a note: OWNER/ADMIN or the note's author.
 """
 
+import enum
 import uuid
 from typing import Any
 
@@ -16,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit import service as audit
 from app.auth.dependencies import Principal
 from app.common.errors import ForbiddenError, NotFoundError
-from app.contacts.models import Contact, ContactNote, ContactStatus
+from app.contacts.models import Contact, ContactNote
 from app.contacts.repository import ContactNoteRepository, ContactRepository
 from app.contacts.schemas import ContactCreate, ContactUpdate, NoteCreate, NoteUpdate
 from app.tenants.membership import ensure_member
@@ -24,7 +25,7 @@ from app.timeline import service as timeline
 from app.timeline.models import TimelineCategory, TimelineEventType
 
 # Fields that may not be cleared with an explicit null.
-_NON_NULLABLE = {"name", "status", "tags"}
+_NON_NULLABLE = {"name", "status", "source", "tags", "attributes"}
 
 
 def can_edit_contact(principal: Principal, contact: Contact) -> bool:
@@ -104,7 +105,7 @@ async def update_contact(
 
     old_status = contact.status
     for field, value in changes.items():
-        setattr(contact, field, value.value if isinstance(value, ContactStatus) else value)
+        setattr(contact, field, value.value if isinstance(value, enum.Enum) else value)
 
     if "status" in changes and contact.status != old_status:
         timeline.record(
@@ -117,6 +118,17 @@ async def update_contact(
             actor_user_id=principal.user_id,
             from_status=old_status,
             to_status=contact.status,
+        )
+    other_fields = sorted(set(changes) - {"status"})
+    if other_fields:
+        timeline.record(
+            session,
+            company_id=principal.company_id,
+            contact_id=contact.id,
+            category=TimelineCategory.CONTACT,
+            event_type=TimelineEventType.CONTACT_UPDATED,
+            summary="Updated " + ", ".join(f.replace("_", " ") for f in other_fields),
+            actor_user_id=principal.user_id,
         )
     if changes:
         audit.record(
