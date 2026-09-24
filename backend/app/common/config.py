@@ -74,6 +74,12 @@ class Settings(BaseSettings):
 
     rate_limit_enabled: bool = True
     rate_limit_auth_per_minute: int = Field(default=10, ge=1)
+    # Number of trusted reverse proxies in front of the API (see rate_limit.resolve_client_ip).
+    # 0 = ignore X-Forwarded-For entirely. Must be measured for the actual deployment.
+    trusted_proxy_hops: int = Field(default=0, ge=0, le=5)
+    # Enables GET /health/client-ip (echoes the caller's own proxy headers) for measuring the
+    # proxy chain during deployment verification. Keep disabled otherwise.
+    diagnostics_enabled: bool = False
 
     # Refuse to start (production) / warn (other envs) if the DB role bypasses RLS.
     enforce_db_role_safety: bool = True

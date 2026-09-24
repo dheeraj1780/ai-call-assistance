@@ -71,21 +71,31 @@ npm test && npm run lint && npm run typecheck && npm run build
 non-placeholder JWT secret, no wildcard CORS, disables `/docs`, enables HSTS, and refuses
 to start if the DB role bypasses RLS.
 
-## Deploying to Render
+## Deploying to Render (development/staging only)
 
-`render.yaml` (Blueprint) defines: Postgres `callcopilot-db`, API web service
-`callcopilot-api` (`rootDir: backend`), static site `callcopilot-web` (`rootDir: frontend`).
+**Status: NOT DEPLOYED.** `render.yaml` (Blueprint) defines three resources, all pinned to
+free plans (omitting `plan` makes Render use PAID defaults):
 
-1. Create the Blueprint from the repo in the Render dashboard.
-2. Set `CORS_ORIGINS` on the API to the static site's URL.
-3. Update the `/api/*` rewrite destination in `render.yaml` to the API's real URL.
-4. First-deploy checks (all currently **ASSUMED**, record results here):
-   - `CREATE EXTENSION vector` succeeds for the Render DB user (docs say pgvector is
-     supported — VERIFIED in docs only).
-   - The Render DB user is not a superuser / has no BYPASSRLS (the API refuses to start in
-     production otherwise).
-   - `preDeployCommand` runs migrations on the chosen instance type (not available on free
-     instances; run `uv run alembic upgrade head` from a shell instead).
-   - The static-site rewrite forwards `Set-Cookie` and `Origin`, and the API sees the real
-     client IP (rate limiting).
-   - `.python-version` / `PYTHON_VERSION=3.13.11` is honoured.
+| Resource | Type | Plan |
+|---|---|---|
+| `callcopilot-db` | PostgreSQL 16 | `free` |
+| `callcopilot-api` | Python web service (`rootDir: backend`) | `free` |
+| `callcopilot-web` | Static site (`rootDir: frontend`) | none (static sites are free) |
+
+Free-tier limitations (from Render docs, 2026-09-23): the free Postgres **expires 30 days
+after creation** (14-day grace, then deleted), 1 GB, **no backups** — it is a staging
+database, not a production one. Free web services sleep after 15 idle minutes (~1 min cold
+start), share 750 instance-hours/month, and have no shell/one-off jobs. Bandwidth beyond the
+free allowance is billed if a payment method is on file (otherwise services are suspended).
+
+Startup (`backend/scripts/start.sh`): `alembic upgrade head` then uvicorn. Fails closed —
+a failed migration exits before the API starts. Single-instance only (ADR-013).
+
+Rate-limit client IP (ADR-014): `TRUSTED_PROXY_HOPS=0` ignores `X-Forwarded-For` (all
+clients share one bucket — safe but coarse). After deploying, measure the proxy chain with
+`GET /health/client-ip` (enabled by `DIAGNOSTICS_ENABLED=true`), set the measured hop
+count, re-test, then disable diagnostics.
+
+Dashboard steps: push `main` → New → Blueprint → select the repo → enter `CORS_ORIGINS`
+(the static site URL) → create. Then confirm the API URL matches the `/api/*` rewrite in
+`render.yaml` (update it if Render assigned a different host).

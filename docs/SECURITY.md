@@ -26,9 +26,10 @@
 
 ## Known limitations / follow-ups
 
-- Rate limits are per process (ADR-011). Behind the Render static-site rewrite the client IP
-  seen by the API may be the proxy's — **REQUIRES VERIFICATION on first deploy**; login is
-  also limited per email regardless.
+- Rate limits are per process (ADR-011). Client IP comes from `TRUSTED_PROXY_HOPS`
+  (ADR-014); with the default `0` all clients behind a proxy share one bucket. The correct
+  hop count for Render is **NOT VERIFIED** until measured on a deployment. The per-email login
+  limit works independently.
 - Registration returns 409 for an existing email (standard UX trade-off; rate limited).
 - No MFA, email verification, password reset or account lockout yet (not in Phase 1 scope).
 - Failed logins for unknown emails are stored without a tenant and are visible only to

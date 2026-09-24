@@ -3,25 +3,28 @@
 # Status: NOT YET DEPLOYED. Items marked ASSUMED must be confirmed on the first deploy
 # (see docs/DEVELOPMENT.md -> "Deploying to Render").
 #
-# Instance plans are intentionally omitted (Render defaults apply); choose plans in the
-# dashboard. Note: preDeployCommand is not available on free instances (ASSUMED) - run
-# migrations manually there.
+# DEVELOPMENT/STAGING ONLY. Plans are pinned to `free` explicitly: when `plan` is omitted
+# Render defaults to PAID instance types. The free Postgres database expires 30 days after
+# creation and has no backups - it is not a production database.
+# preDeployCommand is paid-only, so migrations run in scripts/start.sh at startup
+# (single instance only - revisit before scaling out; see docs/DECISIONS.md ADR-013).
 
 databases:
   - name: callcopilot-db
+    plan: free
     databaseName: callcopilot
     postgresMajorVersion: "16"
 
 services:
   - type: web
     name: callcopilot-api
+    plan: free
     runtime: python
     rootDir: backend
     # Render uses uv when uv.lock is present in the service root (VERIFIED in Render docs).
     buildCommand: uv sync --frozen --no-dev
-    preDeployCommand: uv run --no-sync alembic upgrade head
-    # --proxy-headers: trust Render's proxy for the client IP (used for rate limiting).
-    startCommand: uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
+    # Runs `alembic upgrade head`, then uvicorn; exits (fails the deploy) if migration fails.
+    startCommand: bash scripts/start.sh
     healthCheckPath: /health/ready
     envVars:
       - key: PYTHON_VERSION
@@ -44,6 +47,13 @@ services:
       # CSRF origin check on /auth/refresh and /auth/logout).
       - key: CORS_ORIGINS
         sync: false
+      # Client IP for rate limiting. 0 = ignore X-Forwarded-For (fail-safe: all clients share
+      # the proxy's bucket). Set only after measuring Render's proxy chain (docs/SECURITY.md).
+      - key: TRUSTED_PROXY_HOPS
+        value: "0"
+      # Temporary: enables GET /health/client-ip to measure the proxy chain. Disable after.
+      - key: DIAGNOSTICS_ENABLED
+        value: "true"
 
   - type: web
     name: callcopilot-web

@@ -210,3 +210,40 @@ def test_text_formatter_includes_fields_and_redacts() -> None:
     assert "status=200" in line
     assert "hunter2" not in line
     assert "password=[REDACTED]" in line
+
+
+async def test_client_ip_diagnostic_is_disabled_by_default(client: AsyncClient) -> None:
+    resp = await client.get("/health/client-ip")
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "not_found"
+
+
+async def test_client_ip_diagnostic_when_enabled(
+    client: AsyncClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "diagnostics_enabled", True)
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 1)
+    resp = await client.get(
+        "/health/client-ip", headers={"X-Forwarded-For": "6.6.6.6, 203.0.113.9"}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["proxy_headers"]["x-forwarded-for"] == ["6.6.6.6, 203.0.113.9"]
+    assert body["resolved_client_ip"] == "203.0.113.9"
+    assert body["trusted_proxy_hops"] == 1
+
+
+async def test_spoofed_forwarded_for_cannot_bypass_ip_rate_limit(
+    client: AsyncClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the fail-safe default (0 hops) a rotating fake X-Forwarded-For has no effect."""
+    monkeypatch.setattr(settings, "rate_limit_auth_per_minute", 2)
+    statuses = []
+    for i in range(4):
+        resp = await client.post(
+            "/api/v1/auth/login",
+            json={"email": f"user{i}@example.com", "password": "wrong-password-1"},
+            headers={"X-Forwarded-For": f"198.51.100.{i}"},
+        )
+        statuses.append(resp.status_code)
+    assert statuses == [401, 401, 429, 429]

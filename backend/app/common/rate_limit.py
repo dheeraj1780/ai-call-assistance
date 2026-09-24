@@ -4,6 +4,7 @@ Adequate for the single-instance MVP. With multiple API instances each instance 
 own counters (limits become per-instance); swap for a shared store only when we scale out.
 """
 
+import ipaddress
 import math
 import threading
 import time
@@ -50,10 +51,41 @@ class FixedWindowRateLimiter:
 limiter = FixedWindowRateLimiter()
 
 
+def resolve_client_ip(peer: str | None, forwarded_for: list[str], trusted_proxy_hops: int) -> str:
+    """Return the client address used for rate limiting.
+
+    ``trusted_proxy_hops`` is the number of reverse proxies we control/trust in front of the
+    app. Each proxy appends the address it received the request from to X-Forwarded-For, so
+    the real client is the entry ``trusted_proxy_hops`` positions from the RIGHT. Anything to
+    the left of it is client-supplied and never trusted.
+
+    Fails safe: with 0 hops, a missing/short header or an unparsable entry, the TCP peer is
+    used (behind a proxy that means all clients share one bucket - stricter, not bypassable).
+    """
+    fallback = peer or "unknown"
+    if trusted_proxy_hops <= 0:
+        return fallback
+    hops = [h.strip() for value in forwarded_for for h in value.split(",") if h.strip()]
+    if len(hops) < trusted_proxy_hops:
+        return fallback
+    candidate = hops[-trusted_proxy_hops]
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return fallback
+
+
+def forwarded_for_values(request: Request) -> list[str]:
+    return request.headers.getlist("x-forwarded-for")
+
+
 def client_ip(request: Request) -> str:
-    # Behind Render's proxy, uvicorn runs with --proxy-headers so request.client is the real
-    # client address. We do not parse X-Forwarded-For ourselves (it is client-spoofable).
-    return request.client.host if request.client else "unknown"
+    # uvicorn runs with --no-proxy-headers, so request.client is always the TCP peer.
+    return resolve_client_ip(
+        request.client.host if request.client else None,
+        forwarded_for_values(request),
+        get_settings().trusted_proxy_hops,
+    )
 
 
 def enforce_auth_rate_limit(request: Request, *, bucket: str, extra_key: str | None = None) -> None:

@@ -113,3 +113,19 @@ Replace with a shared store only when we scale out.
 
 Emails are stored lower-cased (`CHECK (email = lower(email))`) with a unique index on
 `lower(email)`, instead of the `citext` extension (portable across Postgres builds).
+
+## ADR-013 — Migrations run at API startup on staging (Accepted, 2026-09-24; IMPLEMENTED)
+
+Render's `preDeployCommand` is paid-only. `backend/scripts/start.sh` runs
+`alembic upgrade head` before uvicorn with `set -euo pipefail`; a failed migration stops the
+start (fail closed) and Alembic applies pending migrations in one transaction. This is only
+safe with a single API instance starting at a time. **Revisit before scaling out** (use a
+pre-deploy step or a migration job with an advisory lock).
+
+## ADR-014 — Client IP from a configured number of trusted proxy hops (Accepted; IMPLEMENTED)
+
+uvicorn runs with `--no-proxy-headers`. The app takes the client address from
+`X-Forwarded-For` only at position `-TRUSTED_PROXY_HOPS` (entries left of it are
+client-controlled and ignored). Default `0` ignores the header entirely. Any missing, short
+or malformed header falls back to the TCP peer (stricter shared bucket, never bypassable).
+The hop count must be measured per deployment, never guessed.
