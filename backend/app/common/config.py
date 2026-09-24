@@ -14,6 +14,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 AppEnv = Literal["development", "test", "production"]
 
 _SSL_QUERY_PARAMS = {"sslmode", "ssl"}
+_POSTGRES_SCHEMES = {
+    "postgres",
+    "postgresql",
+    "postgresql+asyncpg",
+    "postgresql+psycopg",
+    "postgresql+psycopg2",
+}
 
 
 def normalize_database_url(raw_url: str) -> tuple[str, dict[str, Any]]:
@@ -25,7 +32,9 @@ def normalize_database_url(raw_url: str) -> tuple[str, dict[str, Any]]:
     """
     parts = urlsplit(raw_url.strip())
     scheme = parts.scheme.lower()
-    if scheme not in {"postgres", "postgresql", "postgresql+asyncpg"}:
+    # Driver-qualified SQLAlchemy URLs (e.g. postgresql+psycopg://) are accepted; the app always
+    # connects through its async engine, so any known PostgreSQL driver is normalised to asyncpg.
+    if scheme not in _POSTGRES_SCHEMES:
         raise ValueError("DATABASE_URL must be a PostgreSQL URL")
 
     query = dict(parse_qsl(parts.query, keep_blank_values=True))

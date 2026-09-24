@@ -51,3 +51,30 @@ def test_real_provider_requires_its_key() -> None:
         Settings(
             database_url="postgresql://u:p@h/db", jwt_secret=SECRET, calendar_provider="google"
         )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "postgresql+psycopg://u:p@localhost:5433/callcopilot",
+        "postgresql+psycopg2://u:p@localhost:5433/callcopilot",
+        "postgresql+asyncpg://u:p@localhost:5433/callcopilot",
+        "postgresql://u:p@localhost:5433/callcopilot",
+    ],
+)
+def test_driver_qualified_postgres_urls_normalise_to_asyncpg(raw: str) -> None:
+    from app.common.config import normalize_database_url
+
+    url, _ = normalize_database_url(raw)
+    assert url == "postgresql+asyncpg://u:p@localhost:5433/callcopilot"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["mysql://u:p@h/db", "postgresql+unknown://u:p@h/db", "sqlite:///x.db", "http://h/db"],
+)
+def test_non_postgres_urls_still_rejected(raw: str) -> None:
+    from app.common.config import normalize_database_url
+
+    with pytest.raises(ValueError, match="PostgreSQL"):
+        normalize_database_url(raw)

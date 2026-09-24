@@ -38,7 +38,7 @@ def enable_rls(table: str, *, retention: bool = False) -> None:
         op.execute(f"CREATE POLICY retention_delete ON {table} FOR DELETE USING ({cond})")
 
 
-def _tenant(table: str) -> list[sa.SchemaItem]:
+def _tenant(table: str) -> list[sa.schema.SchemaItem]:
     return [
         sa.ForeignKeyConstraint(
             ["company_id"], ["companies.id"], ondelete="CASCADE",
