@@ -42,11 +42,15 @@ async def main(path: Path, language: str, realtime: bool) -> int:
     stream = await provider.open_stream(language=language, sample_rate=16000, encoding="linear16")
 
     async def feed() -> None:
-        for i in range(0, len(pcm), 640):  # 20 ms frames
-            await stream.send(pcm[i : i + 640])
-            if realtime:
-                await asyncio.sleep(0.02)
-        await stream.close()
+        try:
+            for i in range(0, len(pcm), 640):  # 20 ms frames
+                await stream.send(pcm[i : i + 640])
+                if realtime:
+                    await asyncio.sleep(0.02)
+        except STTError:
+            pass  # the stream failed; the error is reported from results() below
+        finally:
+            await stream.close()
 
     feeder = asyncio.create_task(feed())
     try:
@@ -55,7 +59,12 @@ async def main(path: Path, language: str, realtime: bool) -> int:
             elapsed = time.monotonic() - started
             print(f"[{elapsed:6.2f}s] {kind} {r.start_ms:>6}-{r.end_ms:<6} ms  {r.text}")
     except STTError as exc:
-        print(f"STT error: {exc.code}", file=sys.stderr)
+        hints = {
+            "stt_auth_failed": "check the key path and that the service account has the role "
+            "roles/speech.client (Cloud Speech Client) in the project",
+            "stt_invalid_config": "check GOOGLE_STT_LOCATION (us/eu for chirp_3) and the language",
+        }
+        print(f"STT error: {exc.code} - {hints.get(exc.code, 'see logs')}", file=sys.stderr)
         return 1
     finally:
         await feeder

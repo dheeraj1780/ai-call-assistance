@@ -135,6 +135,9 @@ class Settings(BaseSettings):
     # Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS=<service-account.json> or a
     # workload identity) - never from this file.
     google_cloud_project: str | None = None
+    # Path to a service-account JSON key kept OUTSIDE the repository. Read from settings (so it
+    # also works from backend/.env); when unset, Application Default Credentials are used.
+    google_application_credentials: str | None = None
     # Chirp 3 streaming is GA in the "us" and "eu" multi-regions.
     google_stt_location: str = Field(default="us", pattern=r"^[a-z0-9-]{2,32}$")
     google_stt_model: str = Field(default="chirp_3", pattern=r"^[a-z0-9_]{2,40}$")

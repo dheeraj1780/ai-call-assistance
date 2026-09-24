@@ -40,6 +40,7 @@ class StubSettings:
     stt_stream_max_seconds: float = 60
     stt_connect_timeout_seconds: float = 2.0
     stt_max_reconnects: int = 2
+    google_application_credentials: str | None = None
 
 
 def pcm(ms: int, rate: int = 16000) -> bytes:
@@ -187,10 +188,15 @@ def test_settings_validation_requires_project() -> None:
 
     with pytest.raises(ValueError, match="GOOGLE_CLOUD_PROJECT"):
         Settings(
-            database_url="postgresql://u:p@localhost/db", jwt_secret="x" * 40, stt_provider="google"
+            _env_file=None,  # independent of the developer's backend/.env
+            database_url="postgresql://u:p@localhost/db",
+            jwt_secret="x" * 40,
+            stt_provider="google",
+            google_cloud_project=None,
         )
     with pytest.raises(ValueError, match="stt_language"):
         Settings(
+            _env_file=None,
             database_url="postgresql://u:p@localhost/db",
             jwt_secret="x" * 40,
             stt_language="fr-FR",
@@ -423,3 +429,20 @@ async def test_logs_contain_no_audio_transcripts_or_credentials(
     assert ended
     assert ended[0].__dict__["final_results"] == 1
     assert ended[0].__dict__["language"] == "en-IN"
+
+
+async def test_unreadable_key_file_is_an_auth_error(tmp_path: Any) -> None:
+    from app.speech.google import default_client_factory
+
+    missing = StubSettings()
+    missing.google_application_credentials = str(tmp_path / "missing.json")
+    provider = GoogleSpeechToTextProvider(missing, client_factory=default_client_factory(missing))  # type: ignore[arg-type]
+    with pytest.raises(STTAuthError):
+        await provider.open_stream(language="en-IN", sample_rate=16000, encoding="linear16")
+    not_a_key = tmp_path / "bad.json"
+    not_a_key.write_text('{"type": "authorized_user"}')
+    bad = StubSettings()
+    bad.google_application_credentials = str(not_a_key)
+    provider = GoogleSpeechToTextProvider(bad, client_factory=default_client_factory(bad))  # type: ignore[arg-type]
+    with pytest.raises(STTAuthError):
+        await provider.open_stream(language="en-IN", sample_rate=16000, encoding="linear16")

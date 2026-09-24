@@ -63,6 +63,12 @@ os.environ.update(
         "RATE_LIMIT_AUTH_PER_MINUTE": "1000",
         "LOG_JSON": "true",
         "SIMULATION_UTTERANCE_DELAY_SECONDS": "0",
+        # Tests never use real providers, whatever backend/.env configures for local development.
+        "AI_PROVIDER": "mock",
+        "STT_PROVIDER": "mock",
+        "TELEPHONY_PROVIDER": "mock",
+        "CALENDAR_PROVIDER": "mock",
+        "EMBEDDING_PROVIDER": "hashing",
     }
 )
 

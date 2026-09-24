@@ -76,7 +76,15 @@ def default_client_factory(settings: Settings) -> Callable[[], StreamingClient]:
             if location != "global"
             else None
         )
-        client: StreamingClient = SpeechAsyncClient(client_options=options)
+        credentials = None
+        if settings.google_application_credentials:
+            from google.oauth2 import service_account
+
+            credentials = service_account.Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
+                settings.google_application_credentials,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        client: StreamingClient = SpeechAsyncClient(credentials=credentials, client_options=options)
         return client
 
     return build
@@ -419,6 +427,9 @@ class GoogleSpeechToTextProvider:
         if self._client is None:
             try:
                 self._client = self._factory()
+            except (OSError, ValueError):
+                # Key file missing/unreadable or not a service-account key (path never logged).
+                raise STTAuthError("google credentials file unreadable") from None
             except Exception as exc:  # e.g. DefaultCredentialsError: no credentials found
                 raise classify(exc) from None
         return self._client
