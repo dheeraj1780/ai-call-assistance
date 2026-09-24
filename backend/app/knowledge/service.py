@@ -296,7 +296,7 @@ async def answer_question(
     hits = [
         c
         for c in await retrieve(session, company_id, question)
-        if c.score >= settings.knowledge_min_score
+        if c.score >= settings.knowledge_score_threshold
     ]
     if not hits:
         return AnswerResult(NOT_FOUND_ANSWER, False, [], None)

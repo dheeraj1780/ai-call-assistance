@@ -123,7 +123,9 @@ class Settings(BaseSettings):
 
     knowledge_max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
     # Minimum cosine similarity for a retrieved chunk to be shown/used.
-    knowledge_min_score: float = Field(default=0.3, ge=0, le=1)
+    # Explicit override; by default the threshold depends on the embedding provider because
+    # similarity scales differ (see knowledge_score_threshold).
+    knowledge_min_score: float | None = Field(default=None, ge=0, le=1)
     stt_language: str = "en-IN"
     # Mock-telephony conversation simulator (demo/testing). Only works with TELEPHONY_PROVIDER=mock.
     simulation_enabled: bool = True
@@ -147,6 +149,16 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def knowledge_score_threshold(self) -> float:
+        """Minimum cosine similarity for a knowledge chunk to be used.
+
+        Lexical hashing (dev) scores: relevant ~0.15, unrelated <= 0.06 (measured on the test
+        corpus). The Voyage value is a starting point that must be calibrated (NOT VERIFIED)."""
+        if self.knowledge_min_score is not None:
+            return self.knowledge_min_score
+        return 0.10 if self.embedding_provider == "hashing" else 0.30
 
     @property
     def sqlalchemy_url(self) -> tuple[str, dict[str, Any]]:

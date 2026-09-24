@@ -36,6 +36,21 @@ if not _test_db_url:
 if not _test_db_url.rsplit("/", 1)[-1].split("?", 1)[0].endswith("_test"):
     raise RuntimeError("Refusing to run: TEST_DATABASE_URL database name must end with '_test'")
 
+
+def _db_identity(url: str) -> tuple[str, str]:
+    """(host:port, database) of a URL, ignoring driver and credentials."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url.strip())
+    host = (parts.hostname or "").replace("127.0.0.1", "localhost")
+    return f"{host}:{parts.port or 5432}", parts.path.lstrip("/").split("?", 1)[0]
+
+
+# Tests TRUNCATE every table: never let them touch the application database.
+_app_db_url = os.environ.get("DATABASE_URL") or _read_dotenv_value("DATABASE_URL")
+if _app_db_url and _db_identity(_app_db_url) == _db_identity(_test_db_url):
+    raise RuntimeError("Refusing to run: TEST_DATABASE_URL points at the application database")
+
 os.environ.update(
     {
         "APP_ENV": "test",

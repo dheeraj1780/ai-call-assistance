@@ -407,7 +407,7 @@ class CopilotEngine:
         async with get_session_factory()() as session:
             await set_tenant_context(session, TenantContext(company_id=self.company_id))
             hits = await retrieve(session, self.company_id, seg.text, k=2)
-            good = [h for h in hits if h.score >= settings.knowledge_min_score]
+            good = [h for h in hits if h.score >= settings.knowledge_score_threshold]
             key = f"knowledge:{short_hash(seg.text)}"
             if good:
                 best = good[0]

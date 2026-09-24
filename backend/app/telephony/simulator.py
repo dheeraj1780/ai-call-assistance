@@ -13,6 +13,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
+from app.live import session as live
 from app.telephony.provider import ProviderCallState, TelephonyEvent, Track, get_telephony_provider
 from app.telephony.service import MediaIngest, process_event
 
@@ -47,6 +48,23 @@ DEFAULT_SCRIPT: list[tuple[str, str]] = [
 ]
 
 running: dict[uuid.UUID, asyncio.Task[None]] = {}
+TURN_TIMEOUT_S = 2.0
+
+
+def _processed(call_id: uuid.UUID) -> int:
+    session = live.get_session(call_id)
+    return session.next_seq if session is not None else 0
+
+
+async def _wait_for_segment(call_id: uuid.UUID, before: int) -> None:
+    """Wait (bounded) until the live session has stored one more final segment."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + TURN_TIMEOUT_S
+    while loop.time() < deadline:
+        session = live.get_session(call_id)
+        if session is None or session.next_seq > max(before, 1) or not session.stt_ok:
+            return
+        await asyncio.sleep(0.01)
 
 
 def _media(track: str, seq: int, text: str) -> str:
@@ -93,9 +111,13 @@ async def run(
         await ingest.handle(provider.parse_media_message(json.dumps({"event": "start"})))
         for seq, (speaker, text) in enumerate(script or DEFAULT_SCRIPT, start=1):
             await asyncio.sleep(delay)
+            before = _processed(call_id)
             await ingest.handle(
                 provider.parse_media_message(_media(Track(speaker).value, seq, text))
             )
+            # Natural turn-taking: the next person speaks after this utterance was heard
+            # (otherwise, at zero delay, the two tracks' STT results could interleave).
+            await _wait_for_segment(call_id, before)
         await asyncio.sleep(max(delay, 0.05))  # let STT results flush
         if complete:
             await event(

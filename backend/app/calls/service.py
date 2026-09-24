@@ -171,5 +171,7 @@ async def update_call(
         details={"fields": sorted(data.model_fields_set)},
     )
     await session.commit()
+    # Reload with the id we already have: touching attributes of an expired object would
+    # trigger a synchronous (invalid in async code) refresh.
     session.expire(call)
-    return await get_call(session, principal, call.id)
+    return await get_call(session, principal, call_id)

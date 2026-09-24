@@ -133,7 +133,9 @@ def _grounded(evidence: str | None, haystack: str) -> bool:
 
 
 _FIGURE = re.compile(
-    r"(?:₹\s?\d[\d,.]*|\brs\.?\s?\d[\d,.]*|\b\d[\d,.]*\s?(?:%|lakh|lakhs|crore|k)\b|\b\d{2,}[\d,.]*\b)",
+    # "\b" only after word units: after "%" a boundary never matches before a space/end.
+    r"(?:₹\s?\d[\d,.]*|\brs\.?\s?\d[\d,.]*|\b\d[\d,.]*\s?(?:%|(?:lakh|lakhs|crore|k)\b)"
+    r"|\b\d{2,}[\d,.]*\b)",
     re.IGNORECASE,
 )
 

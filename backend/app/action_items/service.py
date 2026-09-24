@@ -189,7 +189,7 @@ async def update_item(
     )
     await session.commit()
     session.expire(item)
-    return await get_item(session, principal, item.id)
+    return await get_item(session, principal, item_id)
 
 
 async def confirm_item(
@@ -227,7 +227,7 @@ async def confirm_item(
         )
         await session.commit()
         session.expire(item)
-    return await get_item(session, principal, item.id)
+    return await get_item(session, principal, item_id)
 
 
 async def delete_item(

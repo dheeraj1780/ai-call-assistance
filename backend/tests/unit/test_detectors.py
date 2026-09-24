@@ -100,3 +100,10 @@ def test_figure_warnings_flag_invented_numbers() -> None:
     assert figure_warnings("Budget of 2 lakh for 5 branches noted.", source) == []
     warnings = figure_warnings("Special price Rs 49,999 with 20% off", source)
     assert len(warnings) == 2
+
+
+def test_figure_warnings_keep_percent_sign() -> None:
+    from app.postcall.service import figure_warnings
+
+    warnings = figure_warnings("You get 25% off.", "no numbers here")
+    assert warnings == ["Contains a figure not mentioned in the call: 25%"]
