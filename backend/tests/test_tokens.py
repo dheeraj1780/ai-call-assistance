@@ -99,7 +99,7 @@ async def test_alg_none_rejected(
     client: AsyncClient, register: Register, settings: Settings
 ) -> None:
     account = await register(client, "none@example.com", "None Co")
-    token = jwt.encode(_claims(account, settings), key=None, algorithm="none")
+    token = jwt.encode(_claims(account, settings), key=None, algorithm="none")  # type: ignore[arg-type]
     resp = await client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 401
 

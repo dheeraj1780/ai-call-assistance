@@ -5,13 +5,18 @@ description = "AI calling copilot for MSMEs - API"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "alembic>=1.20.0",
+    "anthropic>=1.8.0",
     "argon2-cffi>=25.1.0",
     "asyncpg>=0.31.0",
+    "cryptography>=50.0.1",
     "email-validator>=2.3.0",
     "fastapi>=0.141.1",
+    "httpx>=0.28.1",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
     "pyjwt>=2.14.0",
+    "pypdf>=6.19.0",
+    "python-docx>=1.2.0",
     "sqlalchemy[asyncio]>=2.0.54",
     "uvicorn[standard]>=0.53.0",
 ]
@@ -21,7 +26,6 @@ package = false
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "mypy>=2.3.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",

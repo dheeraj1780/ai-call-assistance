@@ -81,6 +81,44 @@ class Settings(BaseSettings):
     # proxy chain during deployment verification. Keep disabled otherwise.
     diagnostics_enabled: bool = False
 
+    # ---- AI / providers ---------------------------------------------------------------
+    # "mock" = deterministic offline provider (MOCKED output, clearly labelled).
+    ai_provider: Literal["mock", "anthropic"] = "mock"
+    anthropic_api_key: SecretStr | None = None
+    ai_model: str = "claude-opus-5"
+    ai_model_realtime: str = "claude-opus-5"
+    ai_timeout_seconds: float = Field(default=45.0, gt=0, le=300)
+    ai_realtime_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    # Max AI tokens (input+output) per company per rolling 24h; 0 disables the cap.
+    ai_daily_token_budget: int = Field(default=2_000_000, ge=0)
+    copilot_max_llm_calls_per_call: int = Field(default=30, ge=0, le=500)
+    copilot_llm_every_n_segments: int = Field(default=6, ge=1, le=100)
+
+    embedding_provider: Literal["hashing", "voyage"] = "hashing"
+    voyage_api_key: SecretStr | None = None
+
+    telephony_provider: Literal["mock"] = "mock"
+    stt_provider: Literal["mock"] = "mock"
+    # HMAC secret for telephony webhooks / media-stream tokens. Required in production.
+    telephony_webhook_secret: SecretStr | None = None
+    # Public base URL of this API (used to build provider callback URLs).
+    public_base_url: str = "http://localhost:8000"
+
+    google_client_id: str | None = None
+    google_client_secret: SecretStr | None = None
+    # Key for encrypting OAuth refresh tokens at rest (Fernet-style urlsafe base64, 32 bytes).
+    token_encryption_key: SecretStr | None = None
+
+    knowledge_max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
+    # Background jobs (knowledge processing, post-call processing, retention cleanup) run
+    # in-process. Disable to run a separate worker process instead.
+    jobs_worker_enabled: bool = True
+    jobs_poll_interval_seconds: float = Field(default=2.0, gt=0)
+    retention_sweep_interval_seconds: int = Field(default=3600, ge=60)
+
+    # Mock providers must never silently serve real users.
+    allow_mock_providers_in_production: bool = False
+
     # Refuse to start (production) / warn (other envs) if the DB role bypasses RLS.
     enforce_db_role_safety: bool = True
 
@@ -110,6 +148,32 @@ class Settings(BaseSettings):
                 raise ValueError("JWT_SECRET still has the placeholder value")
             if "*" in self.cors_origin_list:
                 raise ValueError("Wildcard CORS origins are not allowed in production")
+        if self.ai_provider == "anthropic" and self.anthropic_api_key is None:
+            raise ValueError("AI_PROVIDER=anthropic requires ANTHROPIC_API_KEY")
+        if self.embedding_provider == "voyage" and self.voyage_api_key is None:
+            raise ValueError("EMBEDDING_PROVIDER=voyage requires VOYAGE_API_KEY")
+        if self.is_production:
+            mocks = [
+                name
+                for name, is_mock in (
+                    ("AI_PROVIDER", self.ai_provider == "mock"),
+                    ("EMBEDDING_PROVIDER", self.embedding_provider == "hashing"),
+                    ("TELEPHONY_PROVIDER", self.telephony_provider == "mock"),
+                    ("STT_PROVIDER", self.stt_provider == "mock"),
+                )
+                if is_mock
+            ]
+            if mocks and not self.allow_mock_providers_in_production:
+                raise ValueError(
+                    "Mock providers are configured in production: "
+                    + ", ".join(mocks)
+                    + ". Configure real providers or set ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true "
+                    "(staging only)."
+                )
+            if self.telephony_webhook_secret is None:
+                raise ValueError("TELEPHONY_WEBHOOK_SECRET is required in production")
+            if self.token_encryption_key is None:
+                raise ValueError("TOKEN_ENCRYPTION_KEY is required in production")
         normalize_database_url(self.database_url)
         return self
 

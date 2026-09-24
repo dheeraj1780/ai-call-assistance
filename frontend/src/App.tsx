@@ -4,6 +4,7 @@ import { RedirectIfAuthenticated, RequireAuth } from "./auth/RequireAuth";
 import { AppLayout } from "./components/AppLayout";
 import { ActionItemsPage } from "./pages/ActionItemsPage";
 import { CallDetailPage } from "./pages/CallDetailPage";
+import { CallPrepPage } from "./pages/CallPrepPage";
 import { ContactDetailPage } from "./pages/ContactDetailPage";
 import { ContactFormPage } from "./pages/ContactFormPage";
 import { ContactsPage } from "./pages/ContactsPage";
@@ -45,6 +46,7 @@ export function App() {
         <Route path="contacts/:id/edit" element={<ContactFormPage />} />
         <Route path="contacts/:id/prepare" element={<PlanCallPage />} />
         <Route path="calls/:id" element={<CallDetailPage />} />
+        <Route path="calls/:id/prepare" element={<CallPrepPage />} />
         <Route path="action-items" element={<ActionItemsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -23,7 +23,7 @@ This file is the hand-off point for any future session. Keep it current.
 | 1 | Foundation (auth, tenants, RLS, logging, React shell) | DONE (`d2815f9`) | 88 backend + 17 frontend tests passed 2026-09-23 |
 | – | Staging deploy config (free plans, start.sh, client IP) | DONE on `main` (`c0903f6`) | unit tests + fail-closed start verified; NOT DEPLOYED |
 | 2/3 | CRM: contacts, notes, timeline, calls (manual), action items | CODE COMPLETE | frontend 25/25 pass; **backend DB tests written, NOT YET RUN** (Postgres down) |
-| 4 | Call preparation + AI agenda | NOT STARTED | |
+| 4 | Call preparation + AI agenda (AI provider layer, jobs queue) | CODE COMPLETE | frontend 26/26; backend tests `test_call_prep.py` written, NOT YET RUN |
 | 5 | Calendar (Google) | NOT STARTED | |
 | 6–7 | Telephony abstraction + call sessions + webhooks | NOT STARTED | |
 | 8–9 | Streaming STT abstraction + live transcript | NOT STARTED | |

@@ -27,7 +27,7 @@ export function PlanCallPage() {
     onSuccess: (call) => {
       queryClient.invalidateQueries({ queryKey: ["calls"] });
       queryClient.invalidateQueries({ queryKey: ["timeline", id] });
-      navigate(`/calls/${call.id}`);
+      navigate(`/calls/${call.id}/prepare`);
     },
   });
   function onSubmit(e: FormEvent) {
@@ -57,7 +57,7 @@ export function PlanCallPage() {
             />
             <TextField label="Scheduled for (optional)" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
             <Button type="submit" disabled={create.isPending}>
-              {create.isPending ? "Saving…" : "Plan call"}
+              {create.isPending ? "Saving…" : "Continue to agenda"}
             </Button>
           </form>
         </Card>

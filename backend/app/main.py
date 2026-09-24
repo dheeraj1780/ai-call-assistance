@@ -1,5 +1,6 @@
 """FastAPI application factory."""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -9,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.action_items.router import router as action_items_router
+from app.agendas.router import router as agendas_router
 from app.auth.dependencies import CSRF_HEADER
 from app.auth.router import router as auth_router
 from app.calls.router import router as calls_router
@@ -19,6 +21,7 @@ from app.common.logging import configure_logging
 from app.common.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.common.rate_limit import client_ip
 from app.contacts.router import router as contacts_router
+from app.jobs.service import worker_loop
 from app.tenants.router import router as tenants_router
 from app.users.router import router as users_router
 
@@ -41,8 +44,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     if settings.enforce_db_role_safety:
         await check_db_role_safety(get_engine(), strict=settings.is_production)
+    import app.common.handlers  # noqa: F401  (registers job handlers and mock AI handlers)
+
+    stop = asyncio.Event()
+    worker: asyncio.Task[None] | None = None
+    if settings.jobs_worker_enabled and settings.app_env != "test":
+        worker = asyncio.create_task(worker_loop(stop), name="jobs-worker")
     logger.info("startup_complete", extra={"env": settings.app_env})
     yield
+    stop.set()
+    if worker is not None:
+        await worker
     await dispose_engine()
 
 
@@ -68,6 +80,7 @@ def create_app() -> FastAPI:
     api.include_router(contacts_router)
     api.include_router(calls_router)
     api.include_router(action_items_router)
+    api.include_router(agendas_router)
     app.include_router(api)
 
     @app.get("/health", tags=["health"], include_in_schema=False)

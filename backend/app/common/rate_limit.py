@@ -99,3 +99,12 @@ def enforce_auth_rate_limit(request: Request, *, bucket: str, extra_key: str | N
         retry_after = limiter.hit(key, settings.rate_limit_auth_per_minute, 60)
         if retry_after is not None:
             raise RateLimitedError(retry_after)
+
+
+def enforce_ai_rate_limit(company_id: object, *, per_minute: int = 20) -> None:
+    """Coarse per-company cap on user-triggered AI requests (agenda, follow-up drafts, ...)."""
+    if not get_settings().rate_limit_enabled:
+        return
+    retry_after = limiter.hit(f"ai:{company_id}", per_minute, 60)
+    if retry_after is not None:
+        raise RateLimitedError(retry_after)

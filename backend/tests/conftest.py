@@ -54,7 +54,10 @@ from httpx import ASGITransport, AsyncClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
+from app.ai.gateway import set_ai_provider  # noqa: E402
+from app.ai.mock_provider import MockAIProvider  # noqa: E402
 from app.auth.passwords import hash_password  # noqa: E402
+from app.common import handlers as _handlers  # noqa: E402, F401
 from app.common.config import get_settings  # noqa: E402
 from app.common.db import TenantContext, get_session_factory, set_tenant_context  # noqa: E402
 from app.common.rate_limit import limiter  # noqa: E402
@@ -65,6 +68,7 @@ from app.users.models import User  # noqa: E402
 DEFAULT_PASSWORD = "correct-horse-battery"
 CSRF = {"X-CSRF-Protection": "1"}
 TABLES = (
+    "jobs, ai_usage_records, agenda_items, "
     "timeline_events, action_items, calls, contact_notes, contacts, "
     "audit_logs, refresh_tokens, auth_sessions, company_members, companies, users"
 )
@@ -82,6 +86,7 @@ def _migrated_database() -> None:
 @pytest.fixture(autouse=True)
 async def _clean_state() -> AsyncIterator[None]:
     limiter.reset()
+    set_ai_provider(MockAIProvider())
     yield
     async with get_session_factory()() as session:
         await session.execute(text(f"TRUNCATE {TABLES} CASCADE"))
