@@ -80,4 +80,21 @@ describe("LiveCallPage", () => {
     await waitFor(() => expect(api.simulate).toHaveBeenCalledWith("c1"));
     expect(reload).toHaveBeenCalled();
   });
+
+  it("identifies a Teams call and explains transient (not stored) mode", () => {
+    const s = state();
+    hook.useLiveCall.mockReturnValue({
+      state: { ...s, channel: "TEAMS", transcript_persistence: "TRANSIENT", call: { ...s.call, channel: "TEAMS", transcript_persistence: "TRANSIENT" } },
+      error: null, connection: "live", reload: vi.fn(), patch: vi.fn(),
+    });
+    renderWithAuth(<LiveCallPage />, { auth, path: "/calls/:id/live", url: "/calls/c1/live" });
+    expect(screen.getByText(/Channel: Microsoft Teams/)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("not stored after the call");
+  });
+
+  it("labels phone calls", () => {
+    hook.useLiveCall.mockReturnValue({ state: state(), error: null, connection: "live", reload: vi.fn(), patch: vi.fn() });
+    renderWithAuth(<LiveCallPage />, { auth, path: "/calls/:id/live", url: "/calls/c1/live" });
+    expect(screen.getByText(/Channel: Phone/)).toBeInTheDocument();
+  });
 });

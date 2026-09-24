@@ -8,6 +8,7 @@ const NAV = [
   { to: "/", label: "Dashboard" },
   { to: "/contacts", label: "Contacts" },
   { to: "/calls", label: "Calls" },
+  { to: "/conversations", label: "Conversations" },
   { to: "/action-items", label: "Action items" },
   { to: "/knowledge", label: "Knowledge" },
   { to: "/calendar", label: "Calendar" },

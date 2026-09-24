@@ -4,14 +4,16 @@ import { Link, useNavigate, useParams } from "react-router";
 
 import { ActionItemList, AddActionItemForm } from "../components/ActionItemList";
 import { Badge, Card, QueryState } from "../components/common";
+import { CommunicationPanel } from "../components/CommunicationPanel";
 import { Timeline } from "../components/Timeline";
 import { Alert, Button } from "../components/ui";
 import { useAuth } from "../auth/context";
+import { CHANNEL_LABEL, conversationsApi } from "../lib/conversations";
 import { crm, formatDateTime, formatDuration, label } from "../lib/crm";
 import { errorMessage } from "../lib/errors";
 import { memberName, useMembers } from "../lib/members";
 
-type Tab = "timeline" | "notes" | "calls" | "tasks";
+type Tab = "timeline" | "notes" | "calls" | "messages" | "tasks";
 
 export function ContactDetailPage() {
   const { id = "" } = useParams();
@@ -81,6 +83,7 @@ export function ContactDetailPage() {
             </Alert>
           ) : null}
           {remove.error ? <Alert>{errorMessage(remove.error)}</Alert> : null}
+          <CommunicationPanel contactId={id} />
           {contact.data.notes ? (
             <Card title="About">
               <p className="whitespace-pre-line text-sm text-slate-700">{contact.data.notes}</p>
@@ -88,7 +91,7 @@ export function ContactDetailPage() {
           ) : null}
 
           <nav className="flex gap-1 border-b border-slate-200" aria-label="Contact sections">
-            {(["timeline", "notes", "calls", "tasks"] as Tab[]).map((t) => (
+            {(["timeline", "notes", "calls", "messages", "tasks"] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -104,6 +107,7 @@ export function ContactDetailPage() {
           {tab === "timeline" ? <Timeline contactId={id} /> : null}
           {tab === "notes" ? <NotesTab contactId={id} myId={session?.user.id} /> : null}
           {tab === "calls" ? <CallsTab contactId={id} /> : null}
+          {tab === "messages" ? <MessagesTab contactId={id} /> : null}
           {tab === "tasks" ? <TasksTab contactId={id} /> : null}
         </div>
       ) : null}
@@ -191,6 +195,30 @@ function CallsTab({ contactId }: { contactId: string }) {
                 </p>
               </div>
               <Badge value={c.status} />
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </QueryState>
+  );
+}
+
+function MessagesTab({ contactId }: { contactId: string }) {
+  const list = useQuery({
+    queryKey: ["conversations", { contactId }],
+    queryFn: () => conversationsApi.list({ contact_id: contactId }),
+  });
+  return (
+    <QueryState isPending={list.isPending} error={list.error} empty={list.data?.length === 0} emptyText="No message conversations yet.">
+      <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
+        {list.data?.map((c) => (
+          <li key={c.id}>
+            <Link to={`/conversations/${c.id}`} className="flex items-center justify-between px-4 py-3 hover:bg-slate-50">
+              <div className="min-w-0">
+                <p className="text-sm text-slate-900">{CHANNEL_LABEL[c.channel] ?? c.channel}</p>
+                {c.preview ? <p className="truncate text-xs text-slate-500">{c.preview}</p> : null}
+              </div>
+              <span className="text-xs text-slate-400">{formatDateTime(c.last_message_at)}</span>
             </Link>
           </li>
         ))}

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 
 import { Card, PageHeader, QueryState, TextArea } from "../components/common";
 import { Alert, Button, TextField } from "../components/ui";
@@ -16,6 +16,9 @@ export function PlanCallPage() {
   const [objective, setObjective] = useState("");
   const [desired, setDesired] = useState("");
   const [when, setWhen] = useState("");
+  const [params] = useSearchParams();
+  const teams = params.get("channel") === "TEAMS";
+  const [meetingUrl, setMeetingUrl] = useState("");
   const create = useMutation({
     mutationFn: () =>
       crm.createCall({
@@ -23,6 +26,7 @@ export function PlanCallPage() {
         objective: objective.trim() || undefined,
         desired_outcome: desired.trim() || undefined,
         scheduled_at: localInputToIso(when),
+        ...(teams ? { channel: "TEAMS" as const, meeting_url: meetingUrl.trim() } : {}),
       }),
     onSuccess: (call) => {
       queryClient.invalidateQueries({ queryKey: ["calls"] });
@@ -37,7 +41,7 @@ export function PlanCallPage() {
   return (
     <QueryState isPending={contact.isPending} error={contact.error}>
       <div className="mx-auto max-w-2xl">
-        <PageHeader title={`Plan a call with ${contact.data?.name ?? ""}`} />
+        <PageHeader title={`Plan a ${teams ? "Teams call" : "call"} with ${contact.data?.name ?? ""}`} />
         <Card>
           <form className="space-y-4" onSubmit={onSubmit}>
             {create.error ? <Alert>{errorMessage(create.error)}</Alert> : null}
@@ -55,6 +59,17 @@ export function PlanCallPage() {
               maxLength={2000}
               onChange={(e) => setDesired(e.target.value)}
             />
+            {teams ? (
+              <TextField
+                label="Teams meeting link"
+                placeholder="https://teams.microsoft.com/l/meetup-join/..."
+                value={meetingUrl}
+                required
+                maxLength={2000}
+                hint="The copilot bot joins this meeting listen-only. Participants see it in the meeting."
+                onChange={(e) => setMeetingUrl(e.target.value)}
+              />
+            ) : null}
             <TextField label="Scheduled for (optional)" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
             <Button type="submit" disabled={create.isPending}>
               {create.isPending ? "Saving…" : "Continue to agenda"}

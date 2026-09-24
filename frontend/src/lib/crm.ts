@@ -80,6 +80,7 @@ export const TIMELINE_CATEGORIES = [
   "APPOINTMENT",
   "STATUS_CHANGE",
   "CONTACT",
+  "MESSAGE",
 ] as const;
 export type TimelineCategory = (typeof TIMELINE_CATEGORIES)[number];
 
@@ -96,6 +97,8 @@ export interface TimelineEvent {
   note_id: string | null;
   call_id: string | null;
   action_item_id: string | null;
+  channel?: string | null;
+  session_id?: string | null;
 }
 
 export interface TimelinePage {
@@ -141,6 +144,9 @@ export interface Call {
   outcome_notes: string | null;
   next_step: string | null;
   provider?: string | null;
+  channel?: "PHONE" | "TEAMS";
+  meeting_url?: string | null;
+  transcript_persistence?: "PERSISTED" | "TRANSIENT" | "PENDING_RECORDING_STATUS";
   created_at: string;
   updated_at: string;
 }
@@ -213,6 +219,8 @@ export const crm = {
     objective?: string;
     desired_outcome?: string;
     scheduled_at?: string;
+    channel?: "PHONE" | "TEAMS";
+    meeting_url?: string;
   }) => apiFetch<Call>("/api/v1/calls", { method: "POST", body }),
   updateCall: (id: string, body: Partial<Call>) =>
     apiFetch<Call>(`/api/v1/calls/${id}`, { method: "PATCH", body }),

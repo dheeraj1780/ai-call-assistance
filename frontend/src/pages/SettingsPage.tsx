@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
+import { Link } from "react-router";
 
 import { useAuth } from "../auth/context";
 import { Card, PageHeader, QueryState, TextArea } from "../components/common";
@@ -15,6 +16,12 @@ export function SettingsPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <PageHeader title="Settings" />
+      <Card title="Integrations">
+        <p className="mb-2 text-sm text-slate-600">Connect Microsoft Teams, WhatsApp Business and phone calling (Plivo).</p>
+        <Link to="/settings/integrations" className="text-sm font-medium text-slate-900 underline">
+          Open Settings → Integrations
+        </Link>
+      </Card>
       <ProfileCard />
       <QueryState isPending={company.isPending} error={company.error}>
         {company.data ? <CompanyCard company={company.data} editable={isAdmin} /> : null}

@@ -122,7 +122,9 @@ function Header({
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Call</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Live call · Channel: {state.channel === "TEAMS" || call.channel === "TEAMS" ? "Microsoft Teams" : "Phone"}
+        </p>
         <div className="flex items-center gap-2">
           <Link to={`/contacts/${call.contact.id}`} className="truncate text-lg font-semibold text-slate-900">
             {call.contact.name}
@@ -170,6 +172,11 @@ function PipelineBanner({ state }: { state: LiveState }) {
   const messages: string[] = [];
   if (state.pipeline.stt === "unavailable")
     messages.push("Live transcription is interrupted. Your phone call continues normally.");
+  const persistence = state.transcript_persistence ?? state.call.transcript_persistence;
+  if (persistence && persistence !== "PERSISTED")
+    messages.push(
+      "Transient mode: the transcript and AI notes are shown live only and are not stored after the call.",
+    );
   if (state.pipeline.copilot === "degraded")
     messages.push("AI suggestions are temporarily limited. Transcript and notes keep working.");
   if (!messages.length) return null;

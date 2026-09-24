@@ -75,6 +75,8 @@ export interface LiveSnapshot {
   notes: CallNote[];
   pipeline: { session_active: boolean; stt: "ok" | "unavailable"; copilot: "ok" | "degraded" };
   simulation_available: boolean;
+  channel?: "PHONE" | "TEAMS";
+  transcript_persistence?: "PERSISTED" | "TRANSIENT" | "PENDING_RECORDING_STATUS";
 }
 
 export interface LiveState extends LiveSnapshot {

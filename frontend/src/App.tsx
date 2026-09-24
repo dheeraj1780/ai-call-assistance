@@ -10,7 +10,10 @@ import { CallPrepPage } from "./pages/CallPrepPage";
 import { ContactDetailPage } from "./pages/ContactDetailPage";
 import { ContactFormPage } from "./pages/ContactFormPage";
 import { ContactsPage } from "./pages/ContactsPage";
+import { ConversationPage } from "./pages/ConversationPage";
+import { ConversationsPage } from "./pages/ConversationsPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
 import { LiveCallPage } from "./pages/LiveCallPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -58,6 +61,9 @@ export function App() {
         <Route path="action-items" element={<ActionItemsPage />} />
         <Route path="calendar" element={<CalendarPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="settings/integrations" element={<IntegrationsPage />} />
+        <Route path="conversations" element={<ConversationsPage />} />
+        <Route path="conversations/:id" element={<ConversationPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

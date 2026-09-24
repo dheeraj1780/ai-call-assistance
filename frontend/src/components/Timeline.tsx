@@ -16,7 +16,9 @@ const ICON: Record<string, string> = {
   CONTACT: "👤",
   SUMMARY: "🧾",
   CALENDAR: "📅",
+  MESSAGE: "💬",
 };
+const CHANNEL: Record<string, string> = { WHATSAPP: "WhatsApp", TEAMS: "Teams", PHONE: "Phone" };
 
 export function Timeline({ contactId }: { contactId: string }) {
   const [category, setCategory] = useState<string>("");
@@ -59,8 +61,14 @@ export function Timeline({ contactId }: { contactId: string }) {
               </span>
               <p className="text-xs text-slate-500">
                 {formatDateTime(e.occurred_at)} · {label(e.event_type)}
+                {e.channel ? ` · ${CHANNEL[e.channel] ?? e.channel}` : ""}
               </p>
               <p className="whitespace-pre-line text-sm text-slate-900">{e.summary}</p>
+              {e.session_id && e.category === "MESSAGE" ? (
+                <Link to={`/conversations/${e.session_id}`} className="text-xs text-slate-600 underline">
+                  View conversation
+                </Link>
+              ) : null}
               {e.call_id ? (
                 <Link to={`/calls/${e.call_id}`} className="text-xs text-slate-600 underline">
                   View call
