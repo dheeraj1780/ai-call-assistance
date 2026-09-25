@@ -34,6 +34,7 @@ from app.live.hub import hub
 from app.live.models import TranscriptSegment
 from app.speech.google import GoogleSpeechToTextProvider
 from app.speech.provider import set_stt_provider
+from app.telephony import service as telephony
 from app.telephony.models import CallRoute
 from app.telephony.provider import parse_json_media_message
 from app.telephony.service import MediaIngest
@@ -213,8 +214,8 @@ async def play_synthetic_meeting(
             await ingest.handle(parse_json_media_message(frame(who, seq, audio[i : i + 640])))
         await asyncio.sleep(0.3)  # natural turn-taking; lets the recognizer answer
     await ingest.handle(parse_json_media_message(json.dumps({"event": "stop"})))
-    await asyncio.sleep(0.3)
     await gw(state="TERMINATED")
+    await telephony.wait_finalized(call_id)  # drain: final transcript + copilot, then post-call
 
 
 async def gateway_call_id(call_id: str) -> str:

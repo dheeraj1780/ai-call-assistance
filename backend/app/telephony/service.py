@@ -6,6 +6,7 @@ Duplicate webhooks are ignored via a unique (provider, event_id); out-of-order w
 move a call backwards and nothing changes a call after it reaches a terminal state.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -411,19 +412,6 @@ async def apply_state(
                 status=new.value,
                 ended=True,
             )
-        if (
-            new in TERMINAL_CALL_STATUSES
-            and jobs.has_handler("postcall.process")
-            # Nothing derived from media may be stored for a transient (e.g. Teams) call.
-            and call.transcript_persistence == TranscriptPersistence.PERSISTED
-        ):
-            await jobs.enqueue(
-                session,
-                "postcall.process",
-                company_id=company_id,
-                payload={"call_id": str(call_id)},
-                dedupe_key=f"postcall:{call_id}",
-            )
         await session.commit()
         payload = {
             "status": call.status,
@@ -432,8 +420,64 @@ async def apply_state(
         }
     hub.publish(call_id, "call.status", payload)
     if new in TERMINAL_CALL_STATUSES:
-        await live.close_session(call_id)
+        schedule_finalize(company_id, call_id)
     return True
+
+
+# ---- End of call: drain the live pipeline, THEN post-call processing ----------------------------
+
+_finalizers: dict[uuid.UUID, asyncio.Task[None]] = {}
+
+
+def schedule_finalize(company_id: uuid.UUID, call_id: uuid.UUID) -> asyncio.Task[None]:
+    """Run the end-of-call sequence in the background (provider webhooks must answer fast):
+    live session drain (final transcript + copilot) -> post-call job. Idempotent per call."""
+    existing = _finalizers.get(call_id)
+    if existing is not None:
+        return existing
+    task = asyncio.create_task(_finalize(company_id, call_id), name=f"finalize-{call_id}")
+    _finalizers[call_id] = task
+    return task
+
+
+async def _finalize(company_id: uuid.UUID, call_id: uuid.UUID) -> None:
+    try:
+        await live.close_session(call_id)
+        async with get_session_factory()() as session:
+            await set_tenant_context(session, TenantContext(company_id=company_id))
+            persistence = await session.scalar(
+                select(Call.transcript_persistence).where(
+                    Call.company_id == company_id, Call.id == call_id
+                )
+            )
+            # Nothing derived from media may be stored for a transient (e.g. Teams) call.
+            if persistence == TranscriptPersistence.PERSISTED and jobs.has_handler(
+                "postcall.process"
+            ):
+                await jobs.enqueue(
+                    session,
+                    "postcall.process",
+                    company_id=company_id,
+                    payload={"call_id": str(call_id)},
+                    dedupe_key=f"postcall:{call_id}",
+                )
+                await session.commit()
+    except Exception:
+        logger.exception("call_finalize_failed", extra={"call_id": str(call_id)})
+    finally:
+        _finalizers.pop(call_id, None)
+
+
+async def wait_finalized(call_id: uuid.UUID) -> None:
+    task = _finalizers.get(call_id)
+    if task is not None:
+        await asyncio.shield(task)
+
+
+async def wait_all_finalized() -> None:
+    tasks = list(_finalizers.values())
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -499,7 +543,11 @@ class MediaIngest:
             logger.warning("media_for_unknown_call")
 
     async def _stopped(self) -> None:
-        """The provider closed the audio stream. The call itself may continue."""
+        """The provider closed the audio stream (AUDIO_INPUT_FINISHED). The call itself may
+        continue; outstanding transcription results keep draining into the pipeline."""
+        session = live.get_session(self.call_id)
+        if session is not None:
+            await session.finish_input()
         async with get_session_factory()() as db:
             route = await db.get(CallRoute, self.call_id)
         if route is None:

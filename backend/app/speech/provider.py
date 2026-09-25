@@ -56,11 +56,25 @@ class STTResult:
     end_ms: int
     confidence: float | None = None
     speaker_label: str | None = None  # provider diarization label, if any
+    # Provider latency: wall time from sending the audio at ``end_ms`` to receiving this result
+    # (observability only; None when the provider cannot measure it).
+    latency_ms: float | None = None
 
 
 class STTStream(Protocol):
+    """One recognition stream.
+
+    Lifecycle: ``send`` audio ... -> ``finish()`` (AUDIO_INPUT_FINISHED: no more audio; buffered
+    audio is flushed) -> ``results()`` keeps yielding until every outstanding final result was
+    delivered and then ends (STT_FINAL_RESULTS_DRAINED) -> ``close()`` releases resources and
+    cancels anything still running (SESSION_CLOSED). ``close()`` without ``finish()`` is an
+    abort. ``pending_audio_ms()`` estimates audio sent/queued but not yet recognised, so callers
+    can size a drain timeout."""
+
     async def send(self, audio: bytes) -> None: ...
     def results(self) -> AsyncIterator[STTResult]: ...
+    async def finish(self) -> None: ...
+    def pending_audio_ms(self) -> float: ...
     async def close(self) -> None: ...
 
 
@@ -107,10 +121,17 @@ class _MockStream:
                 raise item
             yield item
 
-    async def close(self) -> None:
+    async def finish(self) -> None:
+        # Results for everything sent are already queued: ending the queue is the drain.
         if not self._closed:
             self._closed = True
             await self._queue.put(None)
+
+    def pending_audio_ms(self) -> float:
+        return 0.0
+
+    async def close(self) -> None:
+        await self.finish()
 
 
 class MockSpeechToTextProvider:

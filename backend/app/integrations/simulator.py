@@ -246,6 +246,9 @@ async def run_teams_call(
         await ingest.handle(parse_json_media_message(json.dumps({"event": "stop"})))
         if complete:
             await gw("TERMINATED")
+            from app.telephony.service import wait_finalized
+
+            await wait_finalized(call_id)
     except Exception:
         logger.exception("teams_simulation_failed", extra={"call_id": str(call_id)})
     finally:

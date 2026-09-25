@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   TRANSCRIPT_DELAY_S,
   applyEvent,
+  finalisingMessage,
   fromSnapshot,
   transcriptHealth,
   visibleInsights,
@@ -139,6 +140,17 @@ describe("channel/media events", () => {
     expect(s.lastTranscriptAt).toBeNull();
     s = applyEvent(s, { type: "transcript.partial", seq: 4, epoch: "e", data: { speaker: "CUSTOMER", text: "we" } });
     expect(s.lastTranscriptAt).not.toBeNull();
+  });
+
+  it("shows end-of-call finalising phases until the session closes", () => {
+    let s = base();
+    expect(finalisingMessage(s)).toBeNull();
+    s = applyEvent(s, { type: "session.phase", seq: 1, epoch: "e", data: { phase: "input_finished" } });
+    expect(finalisingMessage(s)).toBe("Finalising transcript…");
+    s = applyEvent(s, { type: "session.phase", seq: 2, epoch: "e", data: { phase: "stt_drained", complete: true } });
+    expect(finalisingMessage(s)).toBe("Finishing AI notes…");
+    s = applyEvent(s, { type: "session.phase", seq: 3, epoch: "e", data: { phase: "closed" } });
+    expect(finalisingMessage(s)).toBeNull();
   });
 
   it("reports transcript health without implying the call dropped", () => {

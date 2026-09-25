@@ -124,6 +124,9 @@ async def run(
                 ProviderCallState.COMPLETED,
                 duration=int(len(script or DEFAULT_SCRIPT) * max(delay, 1)),
             )
+            from app.telephony.service import wait_finalized
+
+            await wait_finalized(call_id)
     except Exception:
         logger.exception("simulation_failed", extra={"call_id": str(call_id)})
     finally:

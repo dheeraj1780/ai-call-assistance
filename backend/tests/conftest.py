@@ -127,6 +127,9 @@ async def _clean_state() -> AsyncIterator[None]:
     integration_factory.reset_mocks()
     hub.reset()
     yield
+    from app.telephony.service import wait_all_finalized
+
+    await wait_all_finalized()
     await live_sessions.close_all()
     async with get_session_factory()() as session:
         await session.execute(text(f"TRUNCATE {TABLES} CASCADE"))

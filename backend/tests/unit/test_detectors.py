@@ -3,7 +3,15 @@
 import pytest
 
 from app.agendas.service import derive_keywords
-from app.copilot.detectors import detect, expand_keywords, is_question, topic_matches
+from app.copilot.detectors import (
+    detect,
+    expand_keywords,
+    is_question,
+    title_keywords,
+    topic_groups,
+    topic_matches,
+    topic_raised,
+)
 from app.intel.models import NoteKind, ObjectionCategory
 
 
@@ -107,3 +115,67 @@ def test_figure_warnings_keep_percent_sign() -> None:
 
     warnings = figure_warnings("You get 25% off.", "no numbers here")
     assert warnings == ["Contains a figure not mentioned in the call: 25%"]
+
+
+# ---- phrasing produced by real Google Chirp 3 transcripts (2026-09-25 local test) -------------
+
+
+def test_real_stt_phrasing_is_understood() -> None:
+    first = detect(
+        "Right now we track everything in Excel and we have five branches. "
+        "Reconciling stock every week takes a lot of time.",
+        speaker_is_customer=True,
+    )
+    assert {(d.kind, d.text) for d in first} == {
+        (NoteKind.CURRENT_SOLUTION, "Uses Excel"),
+        (NoteKind.REQUIREMENT, "5 branches"),  # spelled-out number normalised
+        (NoteKind.PAIN_POINT, "Reconciling stock every week takes a lot of time."),
+    }
+    [objection] = detect("Honestly, it looks expensive.", speaker_is_customer=True)
+    assert (objection.kind, objection.category) == (NoteKind.OBJECTION, ObjectionCategory.PRICE)
+    last = detect(
+        "Our budget is around 2 lakh rupees for this year and we want it running before Diwali.",
+        speaker_is_customer=True,
+    )
+    assert {(d.kind, d.text) for d in last} == {
+        (NoteKind.BUDGET, "around 2 lakh rupees for this year"),  # verbatim span (evidence)
+        (NoteKind.TIMELINE, "Before Diwali"),
+    }  # "we want it running" is not a new requirement
+
+
+def test_price_objection_variants_and_number_words() -> None:
+    for text in ("It seems quite costly for us.", "That sounds pricey.", "It is a bit expensive."):
+        assert any(
+            d.category == ObjectionCategory.PRICE for d in detect(text, speaker_is_customer=True)
+        ), text
+    assert [d.text for d in detect("We have twelve outlets.", speaker_is_customer=True)] == [
+        "12 outlets"
+    ]
+    assert all(
+        d.kind != NoteKind.OBJECTION
+        for d in detect("Expensive mistakes happen.", speaker_is_customer=True)
+    )
+
+
+def test_agenda_synonyms_come_from_the_title_not_incidental_question_words() -> None:
+    # "a new *system*" must not make the Budget item claim the current-tools vocabulary.
+    budget = expand_keywords(
+        derive_keywords("Budget", "Have you set aside a budget for a new system?"), topic="Budget"
+    )
+    assert not topic_matches(budget, "Right now we track everything in Excel.")
+    assert topic_matches(budget, "Our budget is around 2 lakh rupees.")
+    assert topic_groups("Pain points") == {"pain"}
+    assert topic_groups("Number of SKUs") == set()
+
+
+def test_topic_needs_the_title_or_two_keywords() -> None:
+    title = "Number of SKUs"
+    keywords = expand_keywords(
+        derive_keywords(title, "Roughly how many products or SKUs do you manage?"), topic=title
+    )
+    words = title_keywords(title)
+    assert not topic_raised(words, keywords, "How do you manage your inventory right now?")
+    assert topic_raised(words, keywords, "We have about 4000 SKUs.")
+    assert topic_raised(words, keywords, "How many products do you manage?")
+    timeline = title_keywords("Timeline")
+    assert topic_raised(timeline, set(), "We want it running before Diwali.")

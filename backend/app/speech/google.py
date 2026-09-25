@@ -154,6 +154,8 @@ class GoogleSTTStream:
         self._stream_base_ms = 0.0  # audio position where the current provider stream started
         self._sent_marks: deque[tuple[float, float]] = deque(maxlen=2000)
         self._last_final_end_ms = 0
+        self._recognised_ms = 0.0
+        self._queued_bytes = 0  # audio waiting in the bounded queue
         # Stats (logged at the end; never contents).
         self.stats: dict[str, float] = {
             "chunks_sent": 0,
@@ -200,9 +202,11 @@ class GoogleSTTStream:
     def _enqueue(self, chunk: bytes) -> None:
         if self._audio.full():
             with contextlib.suppress(asyncio.QueueEmpty):
-                self._audio.get_nowait()  # drop the OLDEST chunk (bounded memory)
+                dropped = self._audio.get_nowait()  # drop the OLDEST chunk (bounded memory)
+                self._queued_bytes -= len(dropped) if isinstance(dropped, bytes) else 0
                 self.stats["chunks_dropped"] += 1
         self._audio.put_nowait(chunk)
+        self._queued_bytes += len(chunk)
 
     # -- provider stream ---------------------------------------------------------------------
 
@@ -245,6 +249,7 @@ class GoogleSTTStream:
                 continue
             if item is _CLOSE:
                 return
+            self._queued_bytes -= len(item)
             now = time.monotonic()
             self._sent_ms += len(item) / self._bytes_per_ms
             self._sent_marks.append((self._sent_ms, now))
@@ -339,6 +344,7 @@ class GoogleSTTStream:
                     self.stats["interim_latency_ms_max"] = max(
                         self.stats["interim_latency_ms_max"], latency
                     )
+            self._recognised_ms = max(self._recognised_ms, float(abs_end))
             await self._results.put(
                 STTResult(
                     text=text,
@@ -347,6 +353,7 @@ class GoogleSTTStream:
                     end_ms=abs_end,
                     # Chirp does not report confidence in streaming (0.0) -> unknown.
                     confidence=conf if 0 < conf <= 1 else None,
+                    latency_ms=round(latency, 1) if latency is not None else None,
                 )
             )
 
@@ -361,23 +368,47 @@ class GoogleSTTStream:
                 raise item
             yield item
 
-    async def close(self) -> None:
-        if self._closed:
+    async def finish(self) -> None:
+        """AUDIO_INPUT_FINISHED: stop accepting audio, flush the partial chunk and end the request
+        stream. Google then returns the remaining results and ``results()`` ends when drained."""
+        if self._closing:
             return
-        self._closed = True
         self._closing = True
         if self._pending:
             self._enqueue(bytes(self._pending))
             self._pending.clear()
         self._enqueue_close()
+        logger.info(
+            "stt_input_finished",
+            extra={"provider": "google", "pending_audio_ms": round(self.pending_audio_ms())},
+        )
+
+    def pending_audio_ms(self) -> float:
+        """Audio queued or sent but not yet covered by a recognition result."""
+        queued_ms = (self._queued_bytes + len(self._pending)) / self._bytes_per_ms
+        return queued_ms + max(0.0, self._sent_ms - self._recognised_ms)
+
+    async def drained(self, limit_s: float) -> bool:
+        """Wait (bounded) until the provider stream finished after ``finish()``."""
         try:
-            await asyncio.wait_for(asyncio.shield(self._task), timeout=5)
-        except (TimeoutError, asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(self._task), timeout=limit_s)
+            return True
+        except TimeoutError:
+            return False
+
+    async def close(self) -> None:
+        """SESSION_CLOSED: finish if needed, give the drain a bounded chance sized to the audio
+        backlog, then cancel whatever is still running."""
+        if self._closed:
+            return
+        await self.finish()
+        self._closed = True
+        budget = self._settings.stt_drain_timeout_seconds + min(self.pending_audio_ms() / 1000, 120)
+        if not await self.drained(budget):
+            logger.warning("stt_drain_timeout", extra={"provider": "google", "timeout_s": budget})
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
-            self._results.put_nowait(None)
-        except Exception:  # pragma: no cover - _run handles its own errors
             self._results.put_nowait(None)
         finals = self.stats["final"]
         logger.info(
@@ -404,7 +435,8 @@ class GoogleSTTStream:
     def _enqueue_close(self) -> None:
         if self._audio.full():
             with contextlib.suppress(asyncio.QueueEmpty):
-                self._audio.get_nowait()
+                dropped = self._audio.get_nowait()
+                self._queued_bytes -= len(dropped) if isinstance(dropped, bytes) else 0
                 self.stats["chunks_dropped"] += 1
         self._audio.put_nowait(_CLOSE)
 

@@ -19,6 +19,7 @@ never written to the database.
 """
 
 import asyncio
+import contextlib
 import logging
 import time
 import uuid
@@ -42,7 +43,9 @@ from app.copilot.detectors import (
     detect,
     expand_keywords,
     is_question,
-    topic_matches,
+    title_keywords,
+    topic_groups,
+    topic_raised,
     word_count,
 )
 from app.intel.models import (
@@ -58,6 +61,16 @@ from app.live.models import Speaker
 
 logger = logging.getLogger(__name__)
 
+# An extracted fact of this kind answers agenda items about this topic group.
+NOTE_TOPIC: dict[NoteKind, str] = {
+    NoteKind.BUDGET: "budget",
+    NoteKind.TIMELINE: "timeline",
+    NoteKind.DECISION_MAKER: "decision",
+    NoteKind.PAIN_POINT: "pain",
+    NoteKind.CURRENT_SOLUTION: "current",
+    NoteKind.NEXT_STEP: "next",
+    NoteKind.COMPETITOR: "competitor",
+}
 ANSWER_WINDOW = 3  # customer must answer within this many segments after a topic is raised
 MIN_ANSWER_WORDS = 5
 MISSING_CHECK_EVERY = 8
@@ -83,6 +96,8 @@ class _AgendaState:
     status: AgendaItemStatus
     manual: bool
     raised_at: int | None = None  # segment index when the topic was raised
+    groups: set[str] = field(default_factory=set)  # topic groups of the title (see NOTE_TOPIC)
+    title_words: set[str] = field(default_factory=set)
     reminded: bool = False
 
 
@@ -168,6 +183,10 @@ class CopilotEngine:
     persist: bool = True
     processing: bool = False
     _transient_keys: set[str] = field(default_factory=set)
+    # kind:normalised-text of every note already shown, whichever pass produced it.
+    _note_texts: set[str] = field(default_factory=set)
+    # Note kinds extracted since the agenda was last updated (an extracted fact answers a topic).
+    _new_note_kinds: set[NoteKind] = field(default_factory=set)
 
     @classmethod
     async def create(
@@ -194,7 +213,9 @@ class CopilotEngine:
                         id=item.id,
                         title=item.title,
                         question=item.question,
-                        keywords=expand_keywords(item.keywords),
+                        keywords=expand_keywords(item.keywords, topic=item.title),
+                        groups=topic_groups(item.title),
+                        title_words=title_keywords(item.title),
                         status=AgendaItemStatus(item.status),
                         manual=item.status_source == StatusSource.MANUAL,
                     )
@@ -217,6 +238,19 @@ class CopilotEngine:
             logger.exception("copilot_segment_failed", extra={"call_id": str(self.call_id)})
             self._set_degraded("internal_error")
 
+    async def finish(self, limit_s: float) -> None:
+        """End of call: wait for an in-flight AI pass, then analyse segments the AI has not seen
+        yet (bounded by the per-call AI budget and ``limit_s``)."""
+        if self.llm_task is not None and not self.llm_task.done():
+            await asyncio.wait([self.llm_task], timeout=limit_s)
+        remaining = self.segments[self.llm_cursor :]
+        if not remaining or self.llm_calls >= get_settings().copilot_max_llm_calls_per_call:
+            return
+        self.llm_cursor = len(self.segments)
+        self.llm_calls += 1
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._llm_pass(remaining), timeout=limit_s)
+
     async def close(self) -> None:
         if self.llm_task and not self.llm_task.done():
             self.llm_task.cancel()
@@ -236,6 +270,9 @@ class CopilotEngine:
         self, session: AsyncSession, d: Detection, segment_id: uuid.UUID | None, source: IntelSource
     ) -> None:
         key = f"{d.kind}:{d.key or short_hash(d.text)}"
+        text_key = f"{d.kind}:{short_hash(' '.join(d.text.lower().split()))}"
+        if text_key in self._note_texts:
+            return  # the same fact from another pass (deterministic vs AI) is shown once
         if self.persist:
             note = await suggest_note(
                 session,
@@ -254,7 +291,9 @@ class CopilotEngine:
                 return
         elif not self._transient_note(d, key, source):
             return
+        self._note_texts.add(text_key)
         self.known_notes.append(f"{d.kind}: {d.text}")
+        self._new_note_kinds.add(d.kind)
         card: tuple[InsightType, InsightPriority, str] | None = None
         if d.kind == NoteKind.OBJECTION:
             label = (d.category or ObjectionCategory.OTHER).value.replace("_", " ").lower()
@@ -297,18 +336,32 @@ class CopilotEngine:
     async def _track_agenda(self, seg: SegmentView) -> None:
         index = len(self.segments) - 1
         changes: list[tuple[_AgendaState, AgendaItemStatus, str, float]] = []
+        answered = {NOTE_TOPIC[k] for k in self._new_note_kinds if k in NOTE_TOPIC}
+        self._new_note_kinds.clear()
         for item in self.agenda:
             if item.manual or item.status in (AgendaItemStatus.COMPLETED, AgendaItemStatus.SKIPPED):
                 continue
-            matched = topic_matches(item.keywords, seg.text)
+            if item.groups & answered:
+                item.status = AgendaItemStatus.COMPLETED
+                changes.append(
+                    (item, AgendaItemStatus.COMPLETED, "Customer gave this information", 0.7)
+                )
+                continue
+            matched = topic_raised(item.title_words, item.keywords, seg.text)
             if item.status == AgendaItemStatus.NOT_STARTED and matched:
                 item.status = AgendaItemStatus.IN_PROGRESS
                 item.raised_at = index
                 changes.append(
                     (item, AgendaItemStatus.IN_PROGRESS, "Topic raised in conversation", 0.5)
                 )
-                # A customer who raises the topic with a full answer also completes it.
-                if seg.speaker == Speaker.CUSTOMER and word_count(seg.text) >= MIN_ANSWER_WORDS + 3:
+                # A customer who raises the topic with a full answer also completes it - unless a
+                # fact extractor covers the topic: then the extracted fact completes it, and a
+                # passing keyword ("every *week*") only marks it as raised.
+                if (
+                    seg.speaker == Speaker.CUSTOMER
+                    and word_count(seg.text) >= MIN_ANSWER_WORDS + 3
+                    and not item.groups & set(NOTE_TOPIC.values())
+                ):
                     item.status = AgendaItemStatus.COMPLETED
                     changes.append(
                         (
@@ -337,6 +390,9 @@ class CopilotEngine:
                 )
         if changes:
             await self._persist_agenda(changes, StatusSource.DETERMINISTIC)
+            if any(status == AgendaItemStatus.COMPLETED for _, status, _, _ in changes):
+                # A topic was just answered: point the salesperson at what is still missing.
+                await self._missing_agenda(seg)
 
     async def _persist_agenda(
         self, changes: list[tuple[_AgendaState, AgendaItemStatus, str, float]], source: StatusSource
@@ -411,7 +467,7 @@ class CopilotEngine:
                     priority=InsightPriority.MEDIUM,
                     content=item.question,
                     source=IntelSource.DETERMINISTIC,
-                    dedupe_key=f"question:agenda:{item.id}",
+                    dedupe_key=f"question:{short_hash(item.question.lower())}",
                     context=f"Agenda: {item.title}",
                 )
 
@@ -556,7 +612,7 @@ class CopilotEngine:
                     priority=InsightPriority.MEDIUM,
                     content=delta.suggested_question,
                     source=IntelSource.AI,
-                    dedupe_key=f"question:{short_hash(delta.suggested_question)}",
+                    dedupe_key=f"question:{short_hash(delta.suggested_question.lower())}",
                 )
         by_id = {str(a.id): a for a in self.agenda}
         changes = []

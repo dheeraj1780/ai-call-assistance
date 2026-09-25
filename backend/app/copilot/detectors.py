@@ -28,6 +28,8 @@ def _rx(*patterns: str) -> re.Pattern[str]:
 OBJECTION_PATTERNS: dict[ObjectionCategory, re.Pattern[str]] = {
     ObjectionCategory.PRICE: _rx(
         r"\btoo (?:expensive|costly|high)\b",
+        r"\b(?:looks|seems|sounds|is|it's|feels) (?:quite |very |really |a bit |a little |too )?"
+        r"(?:expensive|costly|pricey|over ?priced)\b",
         r"\b(?:price|cost|pricing) is (?:too |very |a bit )?(?:high|much|steep)\b",
         r"\bout of (?:our|my) budget\b",
         r"\bcan(?:'t|not) afford\b",
@@ -87,8 +89,16 @@ CURRENT_SOLUTION = re.compile(
     + rf"(?:use|are using|am using)\s+(?:an? |the |our )?(?P<tool2>{KNOWN_TOOLS})\b",
     re.IGNORECASE,
 )
+NUMBER_WORDS = {
+    w: i
+    for i, w in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+        "fifteen sixteen seventeen eighteen nineteen twenty".split()
+    )
+} | {"thirty": 30, "forty": 40, "fifty": 50, "hundred": 100}
+_NUMBER = r"\d{1,6}|" + "|".join(sorted(NUMBER_WORDS, key=len, reverse=True))
 SCALE = re.compile(
-    r"\b(?P<n>\d{1,6})\s+(?P<unit>branches|locations|stores|shops|outlets|warehouses|godowns"
+    rf"\b(?P<n>{_NUMBER})\s+(?P<unit>branches|locations|stores|shops|outlets|warehouses|godowns"
     r"|factories|users|employees|staff|salespeople|orders|invoices|skus|products|trucks)\b",
     re.IGNORECASE,
 )
@@ -100,6 +110,20 @@ NEED = re.compile(
 PAIN = re.compile(
     r"\b(?:problem|issue|pain|headache|difficult|takes (?:a lot of|too much) time|mistakes"
     r"|errors|mismatch|manual(?:ly)?)\b",
+    re.IGNORECASE,
+)
+_AMOUNT = (
+    r"(?:₹\s?\d[\d,.]*(?:\s?(?:lakh|lakhs|lac|crore|k|thousand))?"
+    r"|\brs\.?\s?\d[\d,.]*(?:\s?(?:lakh|lakhs|lac|crore|k|thousand))?"
+    r"|\b\d[\d,.]*\s?(?:lakh|lakhs|lac|crore|k|thousand)\b(?:\s+rupees)?"
+    r"|\b\d[\d,.]*\s+rupees)"
+)
+# A contiguous span of the utterance (so it can later be quoted verbatim as evidence).
+BUDGET_SPAN = re.compile(
+    r"(?:\b(?:around|about|approximately|roughly|under|up to|upto|less than|maximum|max"
+    r"|nearly)\s+)?"
+    + _AMOUNT
+    + r"(?:\s+(?:for|per|a|every)\s+(?:this |the |next )?(?:year|month|quarter|annum))?",
     re.IGNORECASE,
 )
 BUDGET = re.compile(
@@ -144,6 +168,26 @@ def _key(s: str) -> str:
     return _clip(s, 40).lower()
 
 
+_CLAUSES = re.compile(r"[^.;!?]+[.;!?]?")
+
+
+def _clause(text: str, pattern: re.Pattern[str]) -> str:
+    """The sentence/clause of ``text`` that matches ``pattern`` (whole text if none)."""
+    for m in _CLAUSES.finditer(text):
+        clause = m.group(0)
+        if pattern.search(clause):
+            return clause.strip()
+    return text
+
+
+def _number(token: str) -> str:
+    return str(NUMBER_WORDS.get(token.lower(), token))
+
+
+def _cap(s: str) -> str:
+    return s[:1].upper() + s[1:]
+
+
 def detect(text: str, *, speaker_is_customer: bool) -> list[Detection]:
     """Extract structured facts from one utterance. Customer speech is the main source;
     the salesperson's own statements are only scanned for agreed next steps."""
@@ -163,18 +207,28 @@ def detect(text: str, *, speaker_is_customer: bool) -> list[Detection]:
         for m in SCALE.finditer(text):
             unit = m.group("unit").lower()
             found.append(
-                Detection(NoteKind.REQUIREMENT, f"{m.group('n')} {unit}", 0.7, key=f"scale:{unit}")
+                Detection(
+                    NoteKind.REQUIREMENT,
+                    f"{_number(m.group('n'))} {unit}",
+                    0.7,
+                    key=f"scale:{unit}",
+                )
             )
         m = NEED.search(text)
-        if m:
+        # "we want it/this running by ..." refers to the product (a timeline), not a need.
+        if m and not re.match(r"\s*(?:it|this|that|them)\b", m.group("rest"), re.IGNORECASE):
             key = f"need:{_key(m.group('rest'))}"
             found.append(Detection(NoteKind.REQUIREMENT, _clip(text), 0.55, key=key))
         if PAIN.search(text) and not any(d.kind == NoteKind.OBJECTION for d in found):
-            found.append(Detection(NoteKind.PAIN_POINT, _clip(text), 0.5, key=_key(text)))
+            pain = _clause(text, PAIN)
+            found.append(Detection(NoteKind.PAIN_POINT, _clip(pain), 0.5, key=_key(pain)))
         if BUDGET.search(text):
-            found.append(Detection(NoteKind.BUDGET, _clip(text), 0.6, key=_key(text)))
-        if TIMELINE.search(text):
-            found.append(Detection(NoteKind.TIMELINE, _clip(text), 0.55, key=_key(text)))
+            span = BUDGET_SPAN.search(text)
+            budget = span.group(0) if span else _clip(text)
+            found.append(Detection(NoteKind.BUDGET, budget, 0.6, key=_key(budget)))
+        m = TIMELINE.search(text)
+        if m:
+            found.append(Detection(NoteKind.TIMELINE, _cap(m.group(0)), 0.55, key=_key(m.group(0))))
         if DECISION_MAKER.search(text):
             found.append(Detection(NoteKind.DECISION_MAKER, _clip(text), 0.65, key=_key(text)))
     m = NEXT_STEP.search(text)
@@ -190,7 +244,8 @@ TOPIC_SYNONYMS: dict[str, set[str]] = {
         "budget cost costs price pricing spend afford investment rupees lakh lakhs crore".split()
     ),
     "timeline": set(
-        "timeline when deadline month months quarter week weeks date start launch soon".split()
+        "timeline when deadline month months quarter week weeks date start launch soon diwali "
+        "festival festive".split()
     ),
     "decision": set(
         "decision decide decides approve approval boss owner director partner final".split()
@@ -218,19 +273,42 @@ _TOO_GENERIC = {"use", "using", "want", "many", "today", "start", "when", "proce
 _WORDS = re.compile(r"[a-z0-9]+")
 
 
-def expand_keywords(keywords: str | None) -> set[str]:
+def expand_keywords(keywords: str | None, topic: str | None = None) -> set[str]:
+    """Keywords plus synonyms. With `topic` (the agenda item's title) only the title's words are
+    expanded - words that merely appear in the question ("a new *system*") match literally, or
+    every item mentioning a system would claim the whole "current tools" vocabulary."""
     words = set((keywords or "").split())
     expanded = set(words)
-    for w in words:
+    source = words if topic is None else set(_WORDS.findall(topic.lower()))
+    for w in source:
         group = _KEYWORD_TO_GROUP.get(w)
         if group:
             expanded |= TOPIC_SYNONYMS[group]
     return (expanded - _TOO_GENERIC) | (words & _TOO_GENERIC)
 
 
+def topic_groups(title: str) -> set[str]:
+    """The synonym groups an agenda title is about ("Budget" -> {"budget"})."""
+    return {g for w in _WORDS.findall(title.lower()) if (g := _KEYWORD_TO_GROUP.get(w))}
+
+
 def topic_matches(expanded_keywords: set[str], text: str) -> bool:
     tokens = set(_WORDS.findall(text.lower()))
     return bool(tokens & expanded_keywords)
+
+
+def title_keywords(title: str) -> set[str]:
+    """What an agenda item is about: its title's words plus their synonyms."""
+    words = {w for w in _WORDS.findall(title.lower()) if len(w) > 2}
+    return expand_keywords(" ".join(words), topic=title) - _TOO_GENERIC
+
+
+def topic_raised(title_words: set[str], keywords: set[str], text: str) -> bool:
+    """The topic came up: the title (or a synonym) is mentioned, or at least two of the item's
+    keywords are. A single word shared with the item's question ("how do you *manage* ...") is
+    not enough - questions share common verbs."""
+    tokens = set(_WORDS.findall(text.lower()))
+    return bool(tokens & title_words) or len(tokens & keywords) >= 2
 
 
 def word_count(text: str) -> int:

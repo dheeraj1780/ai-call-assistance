@@ -122,6 +122,85 @@ async def simulate(
     return {"status": "started", "provider": "mock"}
 
 
+@router.post("/calls/{call_id}/dev/audio-source")
+async def dev_audio_source(
+    call_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, object]:
+    """LOCAL DEVELOPMENT AUDIO SOURCE (not Teams media): attach a local audio feeder
+    (backend/scripts/local_audio_call.py) to a call placed through a MOCK provider.
+
+    Performs the same connect handshake a real media gateway performs (Teams: ESTABLISHING ->
+    ESTABLISHED -> media AVAILABLE through the gateway-event handler; phone mock: RINGING ->
+    CONNECTED) and returns the call's media WebSocket URL (per-call HMAC token). Audio sent there
+    goes through the normal MediaIngest -> LiveSession -> SpeechToTextProvider pipeline and is
+    never stored. Development only; never available for real provider calls or in production."""
+    settings = get_settings()
+    if not settings.simulation_enabled or settings.is_production:
+        raise AppError("Not available", code="simulation_disabled").with_status(404)
+    call = await get_call(session, principal, call_id)
+    if call.provider not in SIMULATABLE_PROVIDERS or not call.provider_call_id:
+        raise AppError(
+            "Only calls placed through a mock provider accept a local audio source",
+            code="simulation_disabled",
+        ).with_status(404)
+    if call.status in ("COMPLETED", "NO_ANSWER", "CANCELLED", "FAILED", "PLANNED"):
+        raise InvalidStateError("Start the call first; it must be in progress")
+    if call.status == CallStatus.INITIATED:
+        await _connect_for_dev_audio(
+            call.id,
+            call.provider,
+            call.provider_call_id,
+            recording_declared=call.transcript_persistence == "PENDING_RECORDING_STATUS",
+        )
+    _, media_url = service._callback_urls(call.provider, call.id)
+    path = media_url.split("://", 1)[1]
+    path = path[path.index("/") :]
+    return {
+        "label": "LOCAL DEVELOPMENT AUDIO SOURCE",
+        "media_ws_path": path,  # relative: connect on the same host the API is reached on
+        "format": {"encoding": "linear16", "sample_rate": 16000, "channels": 1},
+        "tracks": ["agent", "customer"],
+        "language": call.language or settings.stt_language,
+    }
+
+
+async def _connect_for_dev_audio(
+    call_id: uuid.UUID, provider: str, provider_call_id: str, *, recording_declared: bool
+) -> None:
+    from datetime import UTC, datetime
+
+    if provider == "teams-mock":
+        from app.integrations.webhooks import GatewayEvent, handle_gateway_event
+
+        steps: list[dict[str, str]] = [{"state": "ESTABLISHING"}]
+        if recording_declared:
+            # Same order as the real gateway: updateRecordingStatus first, then audio.
+            steps.append({"recording_status": "RECORDING_CONFIRMED"})
+        steps += [{"state": "ESTABLISHED"}, {"media_status": "AVAILABLE"}]
+        for kw in steps:
+            await handle_gateway_event(
+                "teams-mock",
+                GatewayEvent(
+                    event_id=f"dev-audio-{call_id}-{next(iter(kw.values()))}",
+                    call_id=call_id,
+                    gateway_call_id=provider_call_id,
+                    **kw,
+                ),
+            )
+        return
+    from app.telephony.provider import ProviderCallState, TelephonyEvent
+
+    for state in (ProviderCallState.RINGING, ProviderCallState.CONNECTED):
+        await service.process_event(
+            provider,
+            TelephonyEvent(
+                f"dev-audio-{call_id}-{state}", provider_call_id, state, datetime.now(UTC)
+            ),
+        )
+
+
 @router.post("/webhooks/telephony/{provider_name}", include_in_schema=False)
 async def telephony_webhook(provider_name: str, request: Request) -> JSONResponse:
     """Provider status callbacks. Signature + timestamp verified; events applied exactly once."""

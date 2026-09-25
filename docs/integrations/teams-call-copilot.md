@@ -5,7 +5,8 @@
 | Part | Status (2026-09-25) |
 |---|---|
 | API: Teams calls, gateway contract, transcript persistence rules, live pipeline, copilot | IMPLEMENTED · tested (backend suite) |
-| Google Speech-to-Text adapter | IMPLEMENTED · unit-tested with a fake transport. **Real Google NOT VERIFIED** |
+| Google Speech-to-Text adapter | IMPLEMENTED · unit-tested. **Real Google VERIFIED** (en-IN, en-US; TTS test audio) |
+| Complete local pipeline with real Google: real-time-paced audio → Google STT → transcript → copilot (agenda, missing questions, requirements, objections, notes) → live screen → end of call → post-call | **VERIFIED 2026-09-25** with the LOCAL DEVELOPMENT AUDIO SOURCE (`backend/scripts/local_audio_call.py`). **Not Teams media** |
 | .NET media gateway (`teams-media-gateway/`) | **COMPILES** (.NET 8.0.425, warnings as errors). **33 tests pass**. **RUNS locally in degraded mode** |
 | Gateway media platform on this dev PC | Microsoft's media SDK was started with placeholder settings and failed with `ServiceException: Media platform failed to initialize`. It needs the real certificate, public IP and Windows Server VM |
 | Synthetic end-to-end (synthetic PCM → Google adapter → copilot → live events) | TESTED. **A development test, not a Teams call** |
@@ -81,6 +82,13 @@ The gateway contains **no** business, CRM, AI or prompting logic. The API does n
      - an STT outage during a call
    - **Label: development / synthetic media. Not a Teams call.**
 3. **Real Google STT, no Teams:** `scripts/google_stt_smoke.py` with your credentials and a 16 kHz mono WAV.
+   **The complete local call copilot with real Google STT (LOCAL DEVELOPMENT AUDIO SOURCE – not Teams):**
+   - API with `STT_PROVIDER=google` on :8000, frontend on :5173.
+   - `cd backend && uv run python scripts/local_audio_call.py --email <you> --password <pw> --setup --dialogue <dir>/dialogue.json --start-delay 20 --report report.json`
+   - `--setup` puts Microsoft Teams in **Mock** mode with recording declared, creates a test contact and a Teams call with an 8-item agenda, and starts it. `--call <id>` attaches to a call you started in the UI instead.
+   - `dialogue.json` lists 16 kHz mono 16-bit WAVs, each with an explicit speaker (`agent` / `customer`), like the gateway's unmixed tracks. `--mic --track customer --seconds 30` streams a microphone instead (`uv pip install sounddevice`).
+   - Audio is sent as 20 ms frames on a real-time schedule through the same media WebSocket and `MediaIngest` the gateway uses (development endpoint `POST /api/v1/calls/{id}/dev/audio-source`: mock providers only, simulation enabled, never in production). Nothing is uploaded or stored.
+   - Open the printed live-call URL. The script prints every event, then ends the call, waits for `session.phase = closed` and writes the report (per-final user-visible latency, copilot time, end-of-call phases, agenda, notes, post-call).
 4. **The gateway locally (Windows):**
    1. `cd teams-media-gateway`
    2. `dotnet test tests/TeamsMediaGateway.Tests`
@@ -102,7 +110,7 @@ The gateway contains **no** business, CRM, AI or prompting logic. The API does n
 | 8 | **Media library freshness:** pinned `1.2.0.17950` (2026-07-02). Microsoft requires ≤ ~3 months old, so **upgrade by ~2026-10**. Newer `1.2.0.18725` currently has dependencies that are missing on nuget.org | action | me/you |
 | 9 | **API publicly reachable over HTTPS** (`PUBLIC_BASE_URL`), including WSS for `/api/v1/telephony/media/teams/...` | not done (not deployed) | deployment step |
 | 10 | `TEAMS_MEDIA_GATEWAY_URL` / `TEAMS_MEDIA_GATEWAY_SECRET` on the API, and the same secret on the gateway | not done | you |
-| 11 | **Google STT:** project, API enabled, service account `roles/speech.client`, key path via `GOOGLE_APPLICATION_CREDENTIALS`, `STT_PROVIDER=google` | not done | you |
+| 11 | **Google STT:** project, API enabled, service account `roles/speech.client`, key path via `GOOGLE_APPLICATION_CREDENTIALS`, `STT_PROVIDER=google` | **done on the dev PC** (verified 2026-09-25); repeat on the deployed API with a key or workload identity | you |
 | 12 | CallCopilot → Integrations → Microsoft Teams (Live): tenant ID (plus the app id/secret, per company or platform) → Save → **Test Connection**. Expect ✓ credentials, ✓ calling permissions, ✓ gateway reachable. Then **Enable Real-time Call Copilot** | not done | you |
 | 13 | A **Teams meeting** (scheduled with a classic `/l/meetup-join/...` link) that allows the bot to join (lobby policy) | not done | you |
 | 14 | **Test users:** you as the salesperson, with "Connect my Teams account" done so your audio is labelled correctly, and a colleague acting as the customer | not done | you |

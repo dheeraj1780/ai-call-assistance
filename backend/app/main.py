@@ -66,6 +66,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     stop.set()
     if worker is not None:
         await worker
+    from app.telephony.service import wait_all_finalized
+
+    await wait_all_finalized()
     await live_sessions.close_all()
     await dispose_engine()
 

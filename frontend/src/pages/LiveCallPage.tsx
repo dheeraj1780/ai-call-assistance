@@ -8,6 +8,7 @@ import { errorMessage } from "../lib/errors";
 import {
   LIVE_STATUSES,
   TRANSCRIPT_DELAY_S,
+  finalisingMessage,
   transcriptHealth,
   NOTE_KINDS,
   TERMINAL_STATUSES,
@@ -51,6 +52,7 @@ export function LiveCallPage() {
           {actionError ? <Alert>{errorMessage(actionError)}</Alert> : null}
           <PipelineBanner state={state} />
           <TranscriptHealth state={state} />
+          <FinalisingNotice state={state} />
           <nav className="flex gap-1 border-b border-slate-200 lg:hidden" aria-label="Live call sections">
             {(["copilot", "transcript", "agenda", "notes"] as Tab[]).map((t) => (
               <button
@@ -204,6 +206,16 @@ function TranscriptHealth({ state }: { state: LiveState }) {
   }[health];
   return (
     <p className={`text-xs ${health === "delayed" ? "text-amber-700" : "text-slate-500"}`} aria-live="polite">
+      {text}
+    </p>
+  );
+}
+
+function FinalisingNotice({ state }: { state: LiveState }) {
+  const text = finalisingMessage(state);
+  if (!text) return null;
+  return (
+    <p className="text-xs text-slate-500" aria-live="polite">
       {text}
     </p>
   );

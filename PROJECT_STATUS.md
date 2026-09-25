@@ -1,6 +1,6 @@
 # PROJECT STATUS — AI Calling Copilot (MSME)
 
-_Last updated: 2026-09-25 (Teams call copilot + Google STT)._ This file is the hand-off point for any future session._
+_Last updated: 2026-09-25 (local call copilot verified with real Google STT)._ This file is the hand-off point for any future session._
 
 - **Current branch:** `phase-2-crm` (local only, **not pushed**; all MVP phases live here)
 - **`main`:** Phase 1 (`d2815f9`, pushed) + staging deploy config (`c0903f6`, **not pushed**)
@@ -16,7 +16,11 @@ Plivo is intentionally paused (adapter unchanged). Details: `docs/integrations/t
 
 | Item | Status |
 |---|---|
-| Google Cloud STT v2 adapter (Chirp 3, streaming, interim/final, explicit language en-IN/en-US/hi-IN/de-DE, rotation, reconnect, bounded buffering, shutdown) | IMPLEMENTED · 28 unit tests (fake transport) · real Google NOT VERIFIED |
+| Google Cloud STT v2 adapter (Chirp 3, streaming, interim/final, explicit language en-IN/en-US/hi-IN/de-DE, rotation, reconnect, bounded buffering, shutdown) | IMPLEMENTED · unit-tested · **real Google VERIFIED** for en-IN / en-US (TTS test audio); hi-IN / de-DE configured, NOT VERIFIED |
+| Complete LOCAL call copilot with real Google STT (`backend/scripts/local_audio_call.py`, real-time-paced audio, not Teams) | **VERIFIED 2026-09-25**: 7-line test call → transcript, requirements, budget, timeline, price objection, agenda progress, missing agenda questions, notes, end of call, post-call summary. User-visible latency median 1.3 s, max 1.9 s |
+| End of call: input finished → STT finals drained → copilot final pass → session closed → post-call (bounded, no fixed sleep) | IMPLEMENTED · tested · verified with real Google (last sentence arrived after input ended) |
+| Silent per-speaker tracks (Teams unmixed audio) finalise their utterance after 800 ms | IMPLEMENTED · tested · verified with real Google |
+| AI copilot LLM pass | `AI_PROVIDER=mock` (no Anthropic key configured): deterministic detectors + mock LLM. **Real Claude NOT exercised** |
 | Per-call recognition language (migration `0009_call_language`) | IMPLEMENTED |
 | Synthetic end-to-end (synthetic PCM → Google adapter → copilot → live events) | TESTED (development test, not a Teams call) |
 | `teams-media-gateway` (.NET 8, media SDK 1.2.0.17950) | COMPILES (warnings as errors) · 33 tests pass · runs locally in degraded mode |

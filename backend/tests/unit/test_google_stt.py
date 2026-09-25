@@ -41,6 +41,7 @@ class StubSettings:
     stt_connect_timeout_seconds: float = 2.0
     stt_max_reconnects: int = 2
     google_application_credentials: str | None = None
+    stt_drain_timeout_seconds: float = 1.0
 
 
 def pcm(ms: int, rate: int = 16000) -> bytes:
@@ -446,3 +447,57 @@ async def test_unreadable_key_file_is_an_auth_error(tmp_path: Any) -> None:
     provider = GoogleSpeechToTextProvider(bad, client_factory=default_client_factory(bad))  # type: ignore[arg-type]
     with pytest.raises(STTAuthError):
         await provider.open_stream(language="en-IN", sample_rate=16000, encoding="linear16")
+
+
+# ---- end of call: input finished -> finals drained -> closed -----------------------------------
+
+
+def delayed_final(delay_s: float) -> Behaviour:
+    """Like a real recognizer working through a backlog: the final arrives after input ended."""
+
+    async def run(client: FakeClient, requests: AsyncIterator[Any]) -> AsyncIterator[Any]:
+        position = 0
+        async for r in requests:
+            position += len(r.audio) // 32
+        await asyncio.sleep(delay_s)
+        yield response("the very last sentence.", final=True, end_ms=position)
+
+    return run
+
+
+async def test_finish_drains_final_result_after_fast_push() -> None:
+    # The 2026-09-25 standalone test lost this final (audio pushed faster than real time, then
+    # a fixed 5 s close). finish() now ends input and results() runs until drained.
+    s = stream(FakeClient(delayed_final(1.2)), StubSettings(stt_drain_timeout_seconds=0.2))
+    await s.send(pcm(3000))  # 3 s of audio, instantly
+    await s.finish()
+    assert s.pending_audio_ms() >= 2900  # the drain budget is sized to the backlog
+    got = [r async for r in s.results()]
+    assert [r.text for r in got] == ["the very last sentence."]
+    assert got[0].latency_ms is not None
+    await s.close()
+
+
+async def test_close_waits_for_backlog_then_cancels_when_budget_exceeded() -> None:
+    s = stream(FakeClient(delayed_final(1.0)), StubSettings(stt_drain_timeout_seconds=0.2))
+    await s.send(pcm(1500))
+    await s.close()  # budget 0.2 s + 1.5 s backlog > 1.0 s provider delay -> final kept
+    assert [r.text async for r in s.results()] == ["the very last sentence."]
+
+    slow = stream(FakeClient(delayed_final(30)), StubSettings(stt_drain_timeout_seconds=0.1))
+    await slow.send(pcm(200))
+    started = asyncio.get_running_loop().time()
+    await slow.close()  # 0.1 s + 0.2 s backlog, then cancelled: bounded
+    assert asyncio.get_running_loop().time() - started < 3
+    assert [r async for r in slow.results()] == []
+
+
+async def test_no_audio_is_accepted_after_finish() -> None:
+    client = FakeClient(echo())
+    s = stream(client)
+    await s.send(pcm(100))
+    await s.finish()
+    await s.send(pcm(100))  # ignored: input already finished
+    results = [r async for r in s.results()]
+    assert sum(1 for r in results if r.is_final) == 1
+    assert s.stats["chunks_sent"] == 1

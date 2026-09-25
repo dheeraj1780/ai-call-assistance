@@ -81,6 +81,8 @@ export interface LiveSnapshot {
     media?: "available" | "unavailable" | "unknown";
     media_reason?: string | null;
     copilot_processing?: boolean;
+    /** End-of-call progress: audio stopped -> last STT finals drained -> session closed. */
+    session_phase?: "input_finished" | "stt_drained" | "closed";
   };
   simulation_available: boolean;
   channel?: "PHONE" | "TEAMS";
@@ -175,6 +177,8 @@ export function applyEvent(state: LiveState, msg: LiveMessage): LiveState {
       };
     case "copilot.processing":
       return { ...next, pipeline: { ...next.pipeline, copilot_processing: d.state === "started" } };
+    case "session.phase":
+      return { ...next, pipeline: { ...next.pipeline, session_phase: d.phase as LiveSnapshot["pipeline"]["session_phase"] } };
     default:
       return next;
   }
@@ -203,6 +207,18 @@ export function transcriptHealth(state: LiveState, now: number): "receiving" | "
   if (state.lastTranscriptAt === null) return "waiting";
   const age = (now - state.lastTranscriptAt) / 1000;
   return age < TRANSCRIPT_DELAY_S ? "receiving" : "delayed";
+}
+
+/** Shown after the audio ended while the last sentences are still being transcribed / analysed. */
+export function finalisingMessage(state: LiveState): string | null {
+  switch (state.pipeline.session_phase) {
+    case "input_finished":
+      return "Finalising transcript…";
+    case "stt_drained":
+      return "Finishing AI notes…";
+    default:
+      return null;
+  }
 }
 
 export const LIVE_STATUSES = new Set(["INITIATED", "RINGING", "CONNECTED", "ACTIVE"]);

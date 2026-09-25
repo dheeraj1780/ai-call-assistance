@@ -8,7 +8,7 @@ from functools import lru_cache
 from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 AppEnv = Literal["development", "test", "production"]
@@ -52,7 +52,9 @@ def normalize_database_url(raw_url: str) -> tuple[str, dict[str, Any]]:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", populate_by_name=True
+    )
 
     app_env: AppEnv = "development"
     app_name: str = "MSME Call Copilot"
@@ -130,11 +132,16 @@ class Settings(BaseSettings):
     # similarity scales differ (see knowledge_score_threshold).
     knowledge_min_score: float | None = Field(default=None, ge=0, le=1)
     # Default recognition language for calls (a call may choose another supported language).
-    stt_language: Literal["en-IN", "en-US", "hi-IN", "de-DE"] = "en-IN"
+    stt_language: Literal["en-IN", "en-US", "hi-IN", "de-DE"] = Field(
+        default="en-IN", validation_alias=AliasChoices("STT_LANGUAGE", "STT_LANGUAGE_CODE")
+    )
     # Google Cloud Speech-to-Text v2 (see docs/integrations/google-stt.md). Credentials come from
     # Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS=<service-account.json> or a
     # workload identity) - never from this file.
-    google_cloud_project: str | None = None
+    google_cloud_project: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID"),
+    )
     # Path to a service-account JSON key kept OUTSIDE the repository. Read from settings (so it
     # also works from backend/.env); when unset, Application Default Credentials are used.
     google_application_credentials: str | None = None
@@ -150,6 +157,14 @@ class Settings(BaseSettings):
     stt_stream_max_seconds: int = Field(default=280, ge=30, le=295)
     stt_connect_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     stt_max_reconnects: int = Field(default=3, ge=0, le=10)
+    # After audio input ends: base time allowed for outstanding final results (plus the length of
+    # any audio still unrecognised). Bounded; the call itself is already over at this point.
+    stt_drain_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    # A per-speaker track (Teams unmixed audio) goes silent when that person stops talking - no
+    # frames at all. After this long without audio the track's STT stream is finished, which makes
+    # the recogniser emit the utterance's final result; the next audio opens a new stream. Without
+    # it the last sentence of every turn waits for the speaker's next turn (or a provider timeout).
+    stt_track_idle_finalize_ms: int = Field(default=800, ge=200, le=30000)
     # Mock-telephony conversation simulator (demo/testing). Only works with TELEPHONY_PROVIDER=mock.
     simulation_enabled: bool = True
     simulation_utterance_delay_seconds: float = Field(default=2.0, ge=0, le=30)
