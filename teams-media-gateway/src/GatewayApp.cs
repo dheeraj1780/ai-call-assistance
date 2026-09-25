@@ -10,7 +10,18 @@ public static class GatewayApp
 {
     public static WebApplication Build(string[] args, Action<WebApplicationBuilder>? configure = null)
     {
-        var builder = WebApplication.CreateBuilder(args);
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = args,
+            // As a Windows service the working directory is System32: read appsettings.json from
+            // the install directory instead.
+            ContentRootPath = Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService()
+                ? AppContext.BaseDirectory
+                : null,
+        });
+        // Reports start/stop to the Windows Service Control Manager when run as a service
+        // (graceful stop: active calls are left). No effect otherwise.
+        builder.Host.UseWindowsService(o => o.ServiceName = "CallCopilotTeamsMediaGateway");
         var options = builder.Configuration.GetSection("Gateway").Get<GatewayOptions>() ?? new GatewayOptions();
         var fatal = GatewayOptionsValidator.Fatal(options);
         if (fatal.Count > 0)

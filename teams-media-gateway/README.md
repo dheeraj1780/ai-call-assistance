@@ -101,4 +101,4 @@ $env:ASPNETCORE_URLS = "http://127.0.0.1:9441"   # local only; HTTPS in Azure
 dotnet run -c Release
 ```
 
-**Deploying to the VM.** Run `dotnet publish -c Release -r win-x64` and install the output on the VM. See the readiness checklist in `docs/integrations/teams-call-copilot.md`.
+**Deploying to the VM.** Use `deploy-azure-vm.ps1` (Azure Run Command, no RDP); see [AZURE-VM-DEPLOYMENT.md](AZURE-VM-DEPLOYMENT.md). The readiness checklist is in `docs/integrations/teams-call-copilot.md`.

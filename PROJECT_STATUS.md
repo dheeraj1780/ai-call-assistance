@@ -24,6 +24,7 @@ Plivo is intentionally paused (adapter unchanged). Details: `docs/integrations/t
 | Per-call recognition language (migration `0009_call_language`) | IMPLEMENTED |
 | Synthetic end-to-end (synthetic PCM → Google adapter → copilot → live events) | TESTED (development test, not a Teams call) |
 | `teams-media-gateway` (.NET 8, media SDK 1.2.0.17950) | COMPILES (warnings as errors) · 33 tests pass · runs locally in degraded mode |
+| Azure VM deployment script `teams-media-gateway/deploy-azure-vm.ps1` (+ `AZURE-VM-DEPLOYMENT.md`) | IMPLEMENTED · tested on the dev PC (package, dry-run, health check, Kestrel HTTPS with a store certificate) · **NOT RUN on the Azure VM yet** |
 | Gateway media platform | starts only on the Azure Windows VM with real cert/IP; locally the SDK reports `Media platform failed to initialize` |
 | Live screen: connecting / receiving / delayed / STT unavailable / Teams media unavailable / copilot analysing | IMPLEMENTED · frontend tests |
 | Real Teams meeting | **NOT TESTED** — see the readiness checklist |

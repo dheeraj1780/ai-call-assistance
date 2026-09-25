@@ -35,5 +35,8 @@
     <PackageReference Include="Microsoft.Graph.Communications.Calls.Media" Version="1.2.0.17950" />
     <PackageReference Include="Microsoft.Graph.Communications.Calls" Version="1.2.0.17950" />
     <PackageReference Include="Microsoft.Identity.Client" Version="4.83.1" />
+    <!-- Lets the same executable run as a Windows service (deploy-azure-vm.ps1). A no-op when
+         started from a console or tests. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
   </ItemGroup>
 </Project>

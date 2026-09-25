@@ -36,3 +36,6 @@ TestResults/
 *service-account*.json
 *-credentials.json
 gcp-key*.json
+
+# gateway deployment packages (deploy-azure-vm.ps1 -Package)
+teams-media-gateway/artifacts/
