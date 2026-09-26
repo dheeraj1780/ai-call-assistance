@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,6 +68,16 @@ async def _receipt(provider: Provider, integration_id: uuid.UUID | None, key: st
         )
         await session.commit()
     return inserted is not None
+
+
+async def _release_receipt(provider: Provider, key: str) -> None:
+    async with get_session_factory()() as session:
+        await session.execute(
+            delete(WebhookReceipt).where(
+                WebhookReceipt.provider == provider.value, WebhookReceipt.dedupe_key == key[:300]
+            )
+        )
+        await session.commit()
 
 
 def _reject(provider: str, reason: str, status: int = 401) -> Response:
@@ -140,17 +150,25 @@ async def process_message_events(
         counts["ignored_disabled"] = len(events)
         return counts
     for event in events:
-        if not await _receipt(provider, record.id, f"{record.id}:{event.external_event_id}"):
+        key = f"{record.id}:{event.external_event_id}"
+        if not await _receipt(provider, record.id, key):
             outcome = "duplicate"
         else:
             await set_tenant_context(session, TenantContext(company_id=record.company_id))
-            outcome = await conversations.ingest(
-                session,
-                record.company_id,
-                event,
-                integration_id=record.id,
-                owner_user_id=owner_user_id,
-            )
+            try:
+                outcome = await conversations.ingest(
+                    session,
+                    record.company_id,
+                    event,
+                    integration_id=record.id,
+                    owner_user_id=owner_user_id,
+                )
+            except Exception:
+                # Not processed: forget the receipt so the provider's retry (after our 5xx) is
+                # applied instead of being dropped as a duplicate.
+                await session.rollback()
+                await _release_receipt(provider, key)
+                raise
         counts[outcome] = counts.get(outcome, 0) + 1
     return counts
 

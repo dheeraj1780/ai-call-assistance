@@ -28,6 +28,7 @@ export function CommunicationPanel({ contactId }: { contactId: string }) {
     if (key === "whatsapp_message") open.mutate("WHATSAPP");
     else if (key === "teams_message") open.mutate("TEAMS");
     else if (key === "teams_call") navigate(`/contacts/${contactId}/prepare?channel=TEAMS`);
+    else if (key === "google_meet_call") navigate(`/contacts/${contactId}/prepare?channel=GOOGLE_MEET`);
     else if (key === "phone_call") navigate(`/contacts/${contactId}/prepare`);
   }
 

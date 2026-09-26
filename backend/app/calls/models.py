@@ -49,6 +49,12 @@ LIVE_CALL_STATUSES = frozenset(
 class CallChannel(enum.StrEnum):
     PHONE = "PHONE"
     TEAMS = "TEAMS"
+    GOOGLE_MEET = "GOOGLE_MEET"
+
+
+# Channels where the copilot attaches to an online meeting (identified by its link) instead of
+# bridging two phone numbers.
+MEETING_CHANNELS = frozenset({CallChannel.TEAMS, CallChannel.GOOGLE_MEET})
 
 
 class TranscriptPersistence(enum.StrEnum):
@@ -116,6 +122,9 @@ class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
         ),
         CheckConstraint(
             "channel <> 'TEAMS' OR meeting_url IS NOT NULL", name="teams_requires_meeting_url"
+        ),
+        CheckConstraint(
+            "channel <> 'GOOGLE_MEET' OR meeting_url IS NOT NULL", name="meet_requires_meeting_url"
         ),
         CheckConstraint(
             "language IS NULL OR language IN ('en-IN', 'en-US', 'hi-IN', 'de-DE')",

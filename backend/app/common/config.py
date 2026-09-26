@@ -94,8 +94,16 @@ class Settings(BaseSettings):
 
     # ---- AI / providers ---------------------------------------------------------------
     # "mock" = deterministic offline provider (MOCKED output, clearly labelled).
-    ai_provider: Literal["mock", "anthropic"] = "mock"
+    ai_provider: Literal["mock", "anthropic", "gemini"] = "mock"
+    # Provider for conversation (WhatsApp/Teams message) reply suggestions only; "inherit" uses
+    # AI_PROVIDER. Lets message assistance use a real LLM while other AI tasks stay unchanged.
+    ai_message_assist_provider: Literal["inherit", "mock", "anthropic", "gemini"] = "inherit"
     anthropic_api_key: SecretStr | None = None
+    # Google Gemini (Gemini Developer API key from Google AI Studio).
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str = Field(default="gemini-3.8-flash", pattern=r"^[a-z0-9][a-z0-9.\-]{2,63}$")
+    # thinkingLevel for Gemini 3 models ("low" keeps drafts fast); empty = model default.
+    gemini_thinking_level: Literal["", "low", "medium", "high"] = "low"
     ai_model: str = "claude-opus-5"
     ai_model_realtime: str = "claude-opus-5"
     ai_timeout_seconds: float = Field(default=45.0, gt=0, le=300)
@@ -105,7 +113,12 @@ class Settings(BaseSettings):
     copilot_max_llm_calls_per_call: int = Field(default=30, ge=0, le=500)
     copilot_llm_every_n_segments: int = Field(default=6, ge=1, le=100)
 
-    embedding_provider: Literal["hashing", "voyage"] = "hashing"
+    embedding_provider: Literal["hashing", "voyage", "gemini"] = "hashing"
+    gemini_embedding_model: str = Field(
+        default="gemini-embedding-001", pattern=r"^[a-z0-9][a-z0-9.\-]{2,63}$"
+    )
+    # Knowledge chunks retrieved per query (only those above the similarity threshold are used).
+    knowledge_top_k: int = Field(default=3, ge=1, le=10)
     voyage_api_key: SecretStr | None = None
 
     # Fallback calling provider for PHONE calls when a company has no enabled Plivo
@@ -123,6 +136,12 @@ class Settings(BaseSettings):
     frontend_base_url: str = "http://localhost:5173"
     google_client_id: str | None = None
     google_client_secret: SecretStr | None = None
+    # Google Meet (Meet REST API + Meet Media API, Developer Preview): a separate OAuth web client
+    # because the media scope is restricted. The redirect URI must be registered on that client;
+    # default: {PUBLIC_BASE_URL}/api/v1/integrations/google-meet/oauth/callback.
+    google_meet_client_id: str | None = None
+    google_meet_client_secret: SecretStr | None = None
+    google_meet_redirect_uri: str | None = None
     # Secret for encrypting OAuth refresh tokens at rest (>= 32 chars; stretched to a Fernet key).
     token_encryption_key: SecretStr | None = None
 
@@ -221,6 +240,8 @@ class Settings(BaseSettings):
         corpus). The Voyage value is a starting point that must be calibrated (NOT VERIFIED)."""
         if self.knowledge_min_score is not None:
             return self.knowledge_min_score
+        if self.embedding_provider == "gemini":
+            return 0.60  # starting point for gemini-embedding-001 - calibrate on real documents
         return 0.10 if self.embedding_provider == "hashing" else 0.30
 
     @property
@@ -241,14 +262,23 @@ class Settings(BaseSettings):
                 raise ValueError("JWT_SECRET still has the placeholder value")
             if "*" in self.cors_origin_list:
                 raise ValueError("Wildcard CORS origins are not allowed in production")
-        if self.ai_provider == "anthropic" and self.anthropic_api_key is None:
-            raise ValueError("AI_PROVIDER=anthropic requires ANTHROPIC_API_KEY")
+        used = {self.ai_provider, self.ai_message_assist_provider}
+        if "anthropic" in used and self.anthropic_api_key is None:
+            raise ValueError(
+                "AI_PROVIDER / AI_MESSAGE_ASSIST_PROVIDER=anthropic requires ANTHROPIC_API_KEY"
+            )
+        if "gemini" in used and self.gemini_api_key is None:
+            raise ValueError(
+                "AI_PROVIDER / AI_MESSAGE_ASSIST_PROVIDER=gemini requires GEMINI_API_KEY"
+            )
         if self.calendar_provider == "google" and (
             not self.google_client_id or self.google_client_secret is None
         ):
             raise ValueError("CALENDAR_PROVIDER=google requires GOOGLE_CLIENT_ID/SECRET")
         if self.stt_provider == "google" and not self.google_cloud_project:
             raise ValueError("STT_PROVIDER=google requires GOOGLE_CLOUD_PROJECT")
+        if self.embedding_provider == "gemini" and self.gemini_api_key is None:
+            raise ValueError("EMBEDDING_PROVIDER=gemini requires GEMINI_API_KEY")
         if self.embedding_provider == "voyage" and self.voyage_api_key is None:
             raise ValueError("EMBEDDING_PROVIDER=voyage requires VOYAGE_API_KEY")
         if self.is_production:

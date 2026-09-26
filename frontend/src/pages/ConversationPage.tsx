@@ -133,6 +133,13 @@ function Composer({ conversation, suggestion }: { conversation: Conversation; su
             💡 AI suggestion{suggestion.ai_provider === "mock" ? " (mock AI)" : ""} – review before sending
           </p>
           <p className="mt-1 whitespace-pre-line text-sm text-slate-900">“{suggestion.body}”</p>
+          {suggestion.knowledge_sources?.length ? (
+            <p className="mt-1 text-xs text-emerald-800">
+              📚 Based on company knowledge: {suggestion.knowledge_sources.map((s) => s.title).join(", ")}
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-slate-500">No company knowledge was used for this suggestion.</p>
+          )}
           {suggestion.warnings.length ? (
             <ul className="mt-1 text-xs text-amber-800">
               {suggestion.warnings.map((w) => (
@@ -188,13 +195,12 @@ function LinkContact({ sessionId, ambiguous }: { sessionId: string; ambiguous: b
     queryFn: () => crm.listContacts({ q, limit: 10 }),
     enabled: q.trim().length >= 2,
   });
-  const link = useMutation({
-    mutationFn: () => conversationsApi.link(sessionId, picked),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["conversation", sessionId] });
-      queryClient.invalidateQueries({ queryKey: ["conversations"] });
-    },
-  });
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["conversation", sessionId] });
+    queryClient.invalidateQueries({ queryKey: ["conversations"] });
+  };
+  const link = useMutation({ mutationFn: () => conversationsApi.link(sessionId, picked), onSuccess: refresh });
+  const create = useMutation({ mutationFn: () => conversationsApi.createContact(sessionId), onSuccess: refresh });
   return (
     <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
       <p className="font-medium text-amber-900">
@@ -222,11 +228,17 @@ function LinkContact({ sessionId, ambiguous }: { sessionId: string; ambiguous: b
         <Button variant="secondary" disabled={!picked || link.isPending} onClick={() => link.mutate()}>
           Link to contact
         </Button>
-        <Link to="/contacts/new" className="text-xs underline">
-          Create a new contact
-        </Link>
+        {ambiguous ? (
+          <Link to="/contacts/new" className="text-xs underline">
+            Create a new contact
+          </Link>
+        ) : (
+          <Button variant="secondary" disabled={create.isPending} onClick={() => create.mutate()}>
+            Create contact from this sender
+          </Button>
+        )}
       </div>
-      {link.error ? <Alert>{errorMessage(link.error)}</Alert> : null}
+      {link.error || create.error ? <Alert>{errorMessage(link.error ?? create.error)}</Alert> : null}
     </div>
   );
 }

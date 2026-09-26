@@ -27,8 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.action_items.models import ActionItem, ActionItemKind, ActionItemSource, ActionItemStatus
 from app.ai.gateway import get_ai_gateway
 from app.ai.mock_provider import register_mock
+from app.ai.prompts import MESSAGE_ASSIST, NO_KNOWLEDGE_FOUND
 from app.ai.provider import AITask
-from app.ai.safety import UNTRUSTED_DATA_RULES, data_block
+from app.ai.safety import data_block
 from app.common.config import get_settings
 from app.common.db import TenantContext, get_session_factory, set_tenant_context
 from app.contacts.models import Contact
@@ -69,6 +70,9 @@ class AssistAction(BaseModel):
 
 class MessageAssist(BaseModel):
     reply: Annotated[str, Field(max_length=1000)]
+    # Whether the reply relies on the supplied company knowledge, and which excerpts (by id).
+    knowledge_used: bool = False
+    knowledge_chunk_ids: Annotated[list[str], Field(max_length=10)] = []
     notes: Annotated[list[AssistNote], Field(max_length=8)] = []
     actions: Annotated[list[AssistAction], Field(max_length=3)] = []
 
@@ -76,21 +80,15 @@ class MessageAssist(BaseModel):
 class MessageAssistContext(BaseModel):
     channel: str
     customer_name: str | None
+    customer_organization: str | None = None
+    company_name: str | None = None
     company_products: str | None
     history: list[dict[str, str]]
     latest: str
     knowledge: list[dict[str, str]]
 
 
-ASSIST_SYSTEM = (
-    "You help a salesperson reply to a customer message (channel given in the data). Draft ONE "
-    "short, polite reply the salesperson can edit before sending; answer only with facts from "
-    "the conversation and the company knowledge excerpts; if information is missing, say the "
-    "salesperson will confirm. Never promise prices, discounts, delivery dates or features "
-    "that are not in the data. Also extract structured notes (requirement, budget, timeline, "
-    "objection with category, next step...) from the CUSTOMER's messages and suggest at most "
-    "two concrete follow-up actions. " + UNTRUSTED_DATA_RULES
-)
+ASSIST_SYSTEM = MESSAGE_ASSIST.system  # versioned in app/ai/prompts.py
 
 
 @register_mock(AITask.MESSAGE_ASSIST)
@@ -105,8 +103,15 @@ def _mock_assist(context: BaseModel | None) -> MessageAssist:
         actions = [AssistAction(title="Send quotation", kind="FOLLOW_UP", due_in_days=1)]
     elif context.knowledge:
         snippet = " ".join(context.knowledge[0]["content"].split())[:300]
-        reply = f"Hi{name}, thanks for asking. {snippet}"
-        actions = []
+        return MessageAssist(
+            reply=f"Hi{name}, thanks for asking. {snippet}",
+            knowledge_used=True,
+            knowledge_chunk_ids=[context.knowledge[0]["id"]],
+            notes=[
+                AssistNote(kind=d.kind, text=d.text[:300], confidence=0.65, category=d.category)
+                for d in detect(context.latest, speaker_is_customer=True)
+            ][:8],
+        )
     elif is_question(context.latest):
         reply = f"Hi{name}, thanks for your question. Let me check and confirm the details shortly."
         actions = []
@@ -156,9 +161,17 @@ async def _context(
             from app.knowledge.service import retrieve
 
             threshold = get_settings().knowledge_score_threshold
-            hits = await retrieve(session, comm.company_id, message.content, k=2)
+            hits = await retrieve(
+                session, comm.company_id, message.content, k=get_settings().knowledge_top_k
+            )
             knowledge = [
-                {"title": h.title, "content": h.content[:1200]}
+                {
+                    "id": str(h.chunk_id),
+                    "document_id": str(h.document_id),
+                    "title": h.title,
+                    "content": h.content[:1200],
+                    "score": f"{h.score:.3f}",
+                }
                 for h in hits
                 if h.score >= threshold
             ]
@@ -167,6 +180,8 @@ async def _context(
     ctx = MessageAssistContext(
         channel=comm.channel,
         customer_name=contact.name if contact else None,
+        customer_organization=contact.organization if contact else None,
+        company_name=company.name if company else None,
         company_products=company.products_services if company else None,
         history=history,
         latest=message.content,
@@ -184,9 +199,11 @@ def _prompt(ctx: MessageAssistContext, company_instructions: str | None) -> str:
     return "\n\n".join(
         [
             data_block("channel", ctx.channel),
+            data_block("your_company", ctx.company_name or "(unknown)"),
             data_block("company_products", ctx.company_products or "(none)"),
             data_block("company_instructions", company_instructions or "(none)"),
             data_block("customer_name", ctx.customer_name or "(unknown)"),
+            data_block("customer_organization", ctx.customer_organization or "(unknown)"),
             data_block(
                 "conversation",
                 "\n".join(f"{h['from']}: {h['text']}" for h in ctx.history) or "(none)",
@@ -194,7 +211,8 @@ def _prompt(ctx: MessageAssistContext, company_instructions: str | None) -> str:
             data_block("latest_customer_message", ctx.latest),
             data_block(
                 "company_knowledge",
-                "\n\n".join(f"[{k['title']}]\n{k['content']}" for k in ctx.knowledge) or "(none)",
+                "\n\n".join(f"[id={k['id']}] ({k['title']})\n{k['content']}" for k in ctx.knowledge)
+                or NO_KNOWLEDGE_FOUND,
             ),
         ]
     )
@@ -249,6 +267,7 @@ async def assist_message(
         out = result.output
         days = company.transcript_retention_days if company else 30
         reply = out.reply.strip()
+        sources = _knowledge_sources(out, ctx)
         if reply:
             await session.execute(
                 insert(MessageDraft)
@@ -262,6 +281,8 @@ async def assist_message(
                     status=MessageDraftStatus.SUGGESTED.value,
                     warnings=figure_warnings(reply, source_text),
                     ai_provider=result.usage.provider,
+                    knowledge_sources=sources,
+                    prompt_version=MESSAGE_ASSIST.version,
                     expires_at=datetime.now(UTC) + timedelta(days=days),
                 )
                 .on_conflict_do_nothing(index_elements=["session_id", "reply_to_message_id"])
@@ -285,6 +306,24 @@ async def assist_message(
                 )
             await _suggest_actions(session, company_id, contact.id, comm.owner_user_id, out.actions)
         await session.commit()
+
+
+def _knowledge_sources(out: MessageAssist, ctx: MessageAssistContext) -> list[dict[str, str]]:
+    """The retrieved excerpts the model says it used. Ids the model invents are dropped, so a
+    draft can only claim company knowledge that was really retrieved and supplied."""
+    if not out.knowledge_used:
+        return []
+    supplied = {k["id"]: k for k in ctx.knowledge}
+    cited = [supplied[i] for i in dict.fromkeys(out.knowledge_chunk_ids) if i in supplied]
+    return [
+        {
+            "document_id": k["document_id"],
+            "title": k["title"],
+            "chunk_id": k["id"],
+            "score": k["score"],
+        }
+        for k in cited
+    ]
 
 
 async def _suggest_actions(

@@ -322,9 +322,28 @@ else {
 Step "3. Directories under $InstallRoot"
 $dirs = @("app", "releases", "packages", "logs") | ForEach-Object { Join-Path $InstallRoot $_ }
 foreach ($d in $dirs) { if ($DryRun) { if (-not (Test-Path $d)) { Plan "create $d" } } else { New-Item -ItemType Directory -Force $d | Out-Null } }
+function Set-InstallRootAcl {
+    # Only SYSTEM and Administrators (the service runs as LocalSystem; the binary must not be
+    # replaceable by other local users). A fresh protected ACL replaces whatever the folder had;
+    # Windows re-propagates it to everything inside.
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @("S-1-5-18", "S-1-5-32-544")) {
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object Security.Principal.SecurityIdentifier $sid), "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+    }
+    Set-Acl -Path $InstallRoot -AclObject $acl
+    $allowed = @("S-1-5-18", "S-1-5-32-544")
+    foreach ($item in @((Get-Item $InstallRoot)) + @(Get-ChildItem $InstallRoot -Recurse -Force -ErrorAction SilentlyContinue)) {
+        $extra = @((Get-Acl $item.FullName).Access | Where-Object {
+            $allowed -notcontains $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value })
+        if ($extra) { Warn "unexpected permission on $($item.FullName): $(($extra | ForEach-Object IdentityReference) -join ', ')"; return $false }
+    }
+    return $true
+}
 if (-not $DryRun) {
-    # Only SYSTEM and Administrators (the service runs as LocalSystem).
-    & icacls.exe $InstallRoot /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+    if (Set-InstallRootAcl) { Info "install folder: SYSTEM + Administrators only (verified)" }
+    else { throw "could not restrict the install folder to SYSTEM + Administrators" }
 }
 
 # ======================================================================================
@@ -488,15 +507,17 @@ if ($svc -and $svc.Status -ne "Stopped") {
     (Get-Service $ServiceName).WaitForStatus("Stopped", [TimeSpan]::FromSeconds(60))
 }
 if ($staged) {
-    if (Test-Path $appDir) {
+    if (Test-Path (Join-Path $appDir $ExeName)) {
         $backup = Join-Path $InstallRoot "releases\previous-$Stamp"
         Move-Item $appDir $backup
         Info "previous build kept in $backup"
     }
+    if (Test-Path $appDir) { Remove-Item $appDir -Recurse -Force }  # empty folder from step 3
     Copy-Item $staged $appDir -Recurse
     Get-ChildItem (Join-Path $InstallRoot "releases") -Directory -Filter "extract-*" | Where-Object { $_.FullName -ne $staged } |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     Info "installed build into $appDir"
+    if (-not (Set-InstallRootAcl)) { throw "install folder permissions are not restricted" }
 }
 if (-not $svc) {
     New-Service -Name $ServiceName -BinaryPathName $binPath -DisplayName $DisplayName -StartupType Automatic `
@@ -507,7 +528,10 @@ if (-not $svc) {
 }
 & sc.exe config $ServiceName start= delayed-auto obj= LocalSystem | Out-Null
 # Service-only environment (not machine-wide): readable by SYSTEM and Administrators only.
-$lines = [string[]]@($envMap.Keys | Where-Object { $envMap[$_] } | ForEach-Object { "$_=$($envMap[$_])" })
+# Gateway__* settings are written even when empty: an empty value overrides the placeholders in
+# appsettings.json (e.g. ServiceDnsName "media.example.com"), so /health reports them as missing
+# instead of treating a placeholder as configured.
+$lines = [string[]]@($envMap.Keys | Where-Object { $envMap[$_] -or $_ -like "Gateway__*" } | ForEach-Object { "$_=$($envMap[$_])" })
 New-ItemProperty -Path $ServiceKey -Name Environment -PropertyType MultiString -Value $lines -Force | Out-Null
 $acl = Get-Acl $ServiceKey
 $acl.SetAccessRuleProtection($true, $false)

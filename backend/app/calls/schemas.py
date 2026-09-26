@@ -21,7 +21,7 @@ class CallCreate(BaseModel):
     # The responsible salesperson; defaults to the creator.
     user_id: uuid.UUID | None = None
     channel: CallChannel = CallChannel.PHONE
-    # Teams meeting join link (required for channel TEAMS).
+    # Meeting link (required for channels TEAMS and GOOGLE_MEET).
     meeting_url: str | None = None
     # Recognition language; defaults to the server's STT_LANGUAGE.
     language: Literal["en-IN", "en-US", "hi-IN", "de-DE"] | None = None
@@ -34,8 +34,18 @@ class CallCreate(BaseModel):
                     "A Teams call needs a Microsoft Teams meeting link "
                     "(https://teams.microsoft.com/...)"
                 )
+        elif self.channel == CallChannel.GOOGLE_MEET:
+            from app.integrations.providers.google_meet import meeting_link, parse_meeting_code
+
+            code = parse_meeting_code(self.meeting_url or "")
+            if code is None:
+                raise ValueError(
+                    "A Google Meet call needs a Google Meet link "
+                    "(https://meet.google.com/abc-defg-hij) or meeting code"
+                )
+            self.meeting_url = meeting_link(code)
         elif self.meeting_url is not None:
-            raise ValueError("meeting_url is only used for Teams calls")
+            raise ValueError("meeting_url is only used for meeting calls (Teams, Google Meet)")
         return self
 
 

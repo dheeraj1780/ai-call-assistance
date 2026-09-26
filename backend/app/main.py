@@ -24,6 +24,7 @@ from app.common.rate_limit import client_ip
 from app.contacts.router import router as contacts_router
 from app.conversations.router import router as conversations_router
 from app.dashboard.router import router as dashboard_router
+from app.integrations.google_meet_router import router as google_meet_router
 from app.integrations.router import router as integrations_router
 from app.integrations.simulator import router as integrations_simulator_router
 from app.integrations.webhooks import router as integration_webhooks_router
@@ -106,6 +107,7 @@ def create_app() -> FastAPI:
     # /integrations/{slug}.
     api.include_router(integration_webhooks_router)
     api.include_router(integrations_simulator_router)
+    api.include_router(google_meet_router)
     api.include_router(integrations_router)
     api.include_router(conversations_router)
     app.include_router(api)

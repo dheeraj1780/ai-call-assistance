@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.embeddings import EmbeddingError, get_embedding_provider
@@ -27,7 +27,7 @@ from app.audit import service as audit
 from app.auth.dependencies import Principal
 from app.common.config import get_settings
 from app.common.db import TenantContext, get_session_factory, set_tenant_context
-from app.common.errors import AppError, ForbiddenError, NotFoundError
+from app.common.errors import AppError, ConflictError, ForbiddenError, NotFoundError
 from app.jobs.service import enqueue, register_job
 from app.knowledge.extraction import ExtractionError, chunk_text, extract
 from app.knowledge.models import DocumentStatus, KnowledgeChunk, KnowledgeDocument
@@ -69,6 +69,22 @@ async def upload(
     except ExtractionError as exc:
         raise UploadRejectedError(str(exc), code=exc.code) from None
 
+    digest = hashlib.sha256(data).hexdigest()
+    existing = await session.scalar(
+        select(KnowledgeDocument).where(
+            KnowledgeDocument.company_id == principal.company_id,
+            KnowledgeDocument.sha256 == digest,
+            KnowledgeDocument.status != DocumentStatus.FAILED.value,
+        )
+    )
+    if existing is not None:
+        # Same bytes already in the knowledge base: never create duplicate chunks.
+        raise ConflictError(
+            f'This file is already in the knowledge base as "{existing.title}".',
+            code="knowledge_duplicate",
+            details={"document_id": str(existing.id)},
+        )
+
     safe_name = filename.replace("\\", "/").rsplit("/", 1)[-1][:255] or "document"
     doc_title = (title or safe_name.rsplit(".", 1)[0]).strip()[:200] or "Untitled"
     previous = await session.scalar(
@@ -84,7 +100,7 @@ async def upload(
         filename=safe_name,
         mime_type=extracted.mime_type,
         size_bytes=len(data),
-        sha256=hashlib.sha256(data).hexdigest(),
+        sha256=digest,
         version=(previous or 0) + 1,
         status=DocumentStatus.UPLOADED.value,
         uploaded_by_user_id=principal.user_id,
@@ -182,6 +198,47 @@ async def embed_document(company_id: uuid.UUID | None, payload: dict[str, Any]) 
         await session.commit()
 
 
+def current_embedding_model() -> str:
+    provider = get_embedding_provider()
+    return f"{provider.name}:{provider.model}"
+
+
+async def reprocess_document(
+    session: AsyncSession, principal: Principal, document_id: uuid.UUID, *, ip: str | None
+) -> KnowledgeDocument:
+    """Re-embed a document (after a failure, or after EMBEDDING_PROVIDER/model changed - vectors
+    from different models are not comparable). The stored chunks are reused."""
+    _require_admin(principal)
+    doc = await get_document(session, principal, document_id)
+    await session.execute(
+        update(KnowledgeChunk)
+        .where(
+            KnowledgeChunk.company_id == principal.company_id, KnowledgeChunk.document_id == doc.id
+        )
+        .values(embedding=None)
+    )
+    doc.status = DocumentStatus.PROCESSING.value
+    doc.error_code = None
+    await enqueue(
+        session,
+        "knowledge.embed",
+        company_id=principal.company_id,
+        payload={"document_id": str(doc.id)},
+        dedupe_key=f"knowledge:{doc.id}:{uuid.uuid4().hex}",
+    )
+    audit.record(
+        session,
+        "knowledge.reprocessed",
+        company_id=principal.company_id,
+        actor_user_id=principal.user_id,
+        entity_type="knowledge_document",
+        entity_id=doc.id,
+        ip=ip,
+    )
+    await session.commit()
+    return doc
+
+
 async def delete_document(
     session: AsyncSession, principal: Principal, document_id: uuid.UUID, *, ip: str | None
 ) -> None:
@@ -233,6 +290,7 @@ _SEARCH_SQL = text(
     FROM knowledge_chunks c
     JOIN knowledge_documents d ON d.company_id = c.company_id AND d.id = c.document_id
     WHERE c.company_id = :company_id AND d.status = 'READY' AND c.embedding IS NOT NULL
+      AND d.embedding_model = :model
     ORDER BY c.embedding <=> CAST(:q AS vector)
     LIMIT :k
     """
@@ -242,9 +300,19 @@ _SEARCH_SQL = text(
 async def retrieve(
     session: AsyncSession, company_id: uuid.UUID, query: str, *, k: int = 4
 ) -> list[RetrievedChunk]:
-    """Tenant-scoped vector search (explicit company filter; RLS is the backstop)."""
-    vector = (await get_embedding_provider().embed([query], "query"))[0]
-    rows = await session.execute(_SEARCH_SQL, {"q": str(vector), "company_id": company_id, "k": k})
+    """Tenant-scoped vector search (explicit company filter; RLS is the backstop). Only chunks
+    embedded with the current embedding model are compared with the query vector."""
+    provider = get_embedding_provider()
+    vector = (await provider.embed([query], "query"))[0]
+    rows = await session.execute(
+        _SEARCH_SQL,
+        {
+            "q": str(vector),
+            "company_id": company_id,
+            "k": k,
+            "model": f"{provider.name}:{provider.model}",
+        },
+    )
     return [RetrievedChunk(r.id, r.document_id, r.title, r.content, float(r.score)) for r in rows]
 
 

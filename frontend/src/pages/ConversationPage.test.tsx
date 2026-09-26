@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   send: vi.fn(),
   updateDraft: vi.fn(),
   link: vi.fn(),
+  createContact: vi.fn(),
   open: vi.fn(),
   options: vi.fn(),
 }));
@@ -83,6 +84,43 @@ describe("ConversationPage", () => {
     renderWithAuth(<ConversationPage />, { auth, path: "/conversations/:id", url: "/conversations/s1" });
     expect(await screen.findByText(/not linked to a contact yet/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Link to contact" })).toBeDisabled();
+  });
+
+  it("shows which company knowledge a suggestion is based on", async () => {
+    const c = conversation();
+    const d0 = c.drafts[0]!;
+    api.get.mockResolvedValue({
+      ...c,
+      drafts: [{ ...d0, knowledge_sources: [{ document_id: "doc1", title: "Price list", score: 0.81 }] }],
+    });
+    renderWithAuth(<ConversationPage />, { auth, path: "/conversations/:id", url: "/conversations/s1" });
+    expect(await screen.findByText(/Based on company knowledge: Price list/)).toBeInTheDocument();
+    expect(api.send).not.toHaveBeenCalled();
+  });
+
+  it("says when no company knowledge was used", async () => {
+    api.get.mockResolvedValue(conversation());
+    renderWithAuth(<ConversationPage />, { auth, path: "/conversations/:id", url: "/conversations/s1" });
+    expect(await screen.findByText(/No company knowledge was used/)).toBeInTheDocument();
+  });
+
+  it("creates a contact for an unknown sender only when the user asks", async () => {
+    const c = conversation();
+    api.get.mockResolvedValue({ ...c, session: { ...c.session, match_status: "UNMATCHED", contact: null } });
+    api.createContact.mockResolvedValue({});
+    renderWithAuth(<ConversationPage />, { auth, path: "/conversations/:id", url: "/conversations/s1" });
+    const button = await screen.findByRole("button", { name: "Create contact from this sender" });
+    expect(api.createContact).not.toHaveBeenCalled();
+    await userEvent.click(button);
+    await waitFor(() => expect(api.createContact).toHaveBeenCalledWith("s1"));
+  });
+
+  it("offers no one-click contact for an ambiguous number", async () => {
+    const c = conversation();
+    api.get.mockResolvedValue({ ...c, session: { ...c.session, match_status: "AMBIGUOUS", contact: null } });
+    renderWithAuth(<ConversationPage />, { auth, path: "/conversations/:id", url: "/conversations/s1" });
+    expect(await screen.findByText(/Several contacts share this number/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create contact from this sender" })).not.toBeInTheDocument();
   });
 });
 

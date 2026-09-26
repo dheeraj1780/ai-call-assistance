@@ -39,7 +39,10 @@ from app.integrations.providers.base import (
     OutboundMessage,
     ProviderAuthError,
     ProviderError,
+    ProviderPermissionError,
+    ProviderRateLimitError,
     ProviderRequestError,
+    ProviderUnavailableError,
     SentMessage,
     WebhookRejectedError,
     raise_for_status,
@@ -68,6 +71,62 @@ _STATUS_MAP = {
     "read": MessageStatus.READ,
     "failed": MessageStatus.FAILED,
 }
+
+
+# Meta Cloud API error codes (error.code) -> what the salesperson is told. Checked against
+# https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes (2026-09-25);
+# 131030 is the documented test-number restriction ("recipient not in allowed list").
+META_ERRORS: dict[str, str] = {
+    "131047": "More than 24 hours have passed since the customer's last message. WhatsApp only "
+    "allows a free-form reply after the customer messages you again.",
+    "131030": "This number is not in the test number's allowed recipient list. Add it in the Meta "
+    "App Dashboard (WhatsApp > API Setup > To) while using a test number.",
+    "131026": "WhatsApp could not deliver to this number (not on WhatsApp, outdated app or the "
+    "customer has not accepted WhatsApp's terms).",
+    "133010": "The business phone number is not registered on the WhatsApp Business Platform.",
+    "131021": "The customer's number is the same as the business number.",
+    "131031": "The WhatsApp Business Account is restricted by Meta.",
+    "368": "The WhatsApp Business Account is restricted by Meta for a policy violation.",
+    "131042": "Meta reported a payment method problem on the WhatsApp Business Account.",
+    "131051": "WhatsApp does not support this message type.",
+    "131009": "Meta rejected a parameter value in the message.",
+    "100": "Meta rejected the request parameters (check the phone number ID).",
+}
+_RATE_LIMIT_CODES = {"4", "80007", "130429", "131048", "131056"}
+_AUTH_CODES = {"0", "190"}
+_PERMISSION_CODES = {"3", "10", "131005"}
+_UNAVAILABLE_CODES = {"131000", "131016"}
+
+
+def meta_error_code(resp: httpx.Response) -> str | None:
+    try:
+        err = resp.json().get("error")
+    except (ValueError, AttributeError):
+        return None
+    if isinstance(err, dict) and err.get("code") is not None:
+        return str(err["code"])[:16]
+    return None
+
+
+def raise_for_meta(resp: httpx.Response) -> None:
+    """Classify a Graph API error by Meta's error.code (HTTP status alone is ambiguous: e.g.
+    throughput limits). Response bodies are never logged."""
+    if resp.status_code < 400:
+        return
+    code = meta_error_code(resp)
+    if code in _AUTH_CODES:
+        raise ProviderAuthError(f"whatsapp: token rejected ({code})")
+    if code in _PERMISSION_CODES or (code and code.isdigit() and 200 <= int(code) <= 299):
+        raise ProviderPermissionError(f"whatsapp: permission missing ({code})")
+    if code in _RATE_LIMIT_CODES:
+        exc = ProviderRateLimitError(f"whatsapp: rate limited ({code})")
+        exc.retry_after = 60
+        raise exc
+    if code in _UNAVAILABLE_CODES:
+        raise ProviderUnavailableError(f"whatsapp: temporarily unavailable ({code})")
+    if code is not None and resp.status_code < 500:
+        raise ProviderRequestError(f"whatsapp: rejected ({code})", provider_code=code)
+    raise_for_status(resp, provider=NAME)
 
 
 @dataclass(frozen=True)
@@ -256,7 +315,7 @@ class WhatsAppClient:
                 operation="send_message",
                 json=body,
             )
-        raise_for_status(resp, provider=NAME)
+        raise_for_meta(resp)
         try:
             msg_id = str(resp.json()["messages"][0]["id"])
         except (ValueError, KeyError, IndexError, TypeError) as exc:
@@ -276,7 +335,7 @@ class WhatsAppClient:
                     retries=1,
                     params={"fields": "display_phone_number,verified_name,quality_rating"},
                 )
-                raise_for_status(resp, provider=NAME)
+                raise_for_meta(resp)
                 info = resp.json()
                 report.account_label = (
                     " ".join(
@@ -313,7 +372,7 @@ class WhatsAppClient:
                         retries=1,
                         params={"fields": "id"},
                     )
-                    raise_for_status(resp, provider=NAME)
+                    raise_for_meta(resp)
                     ids = {str(p.get("id")) for p in resp.json().get("data") or []}
                     report.add(
                         "business_account",
@@ -330,6 +389,39 @@ class WhatsAppClient:
                         False,
                         f"Could not list the account's numbers ({exc.code}); the token may lack "
                         "whatsapp_business_management.",
+                    )
+            if report.ok:
+                # Inbound messages only arrive when an app is subscribed to the WABA's webhooks.
+                # Informational: it does not fail the test.
+                label = "A Meta app is subscribed to this WhatsApp Business Account's webhooks"
+                try:
+                    resp = await request(
+                        http,
+                        "GET",
+                        f"{self._base}/{self.creds.business_account_id}/subscribed_apps",
+                        provider=NAME,
+                        operation="subscribed_apps",
+                        retries=1,
+                    )
+                    raise_for_meta(resp)
+                    subscribed = bool(resp.json().get("data"))
+                    report.add(
+                        "webhook_subscription",
+                        label,
+                        subscribed,
+                        None
+                        if subscribed
+                        else "No app is subscribed: POST /{WABA_ID}/subscribed_apps with this "
+                        "token (see REAL-WHATSAPP-SETUP.md), otherwise no messages arrive.",
+                        required=False,
+                    )
+                except ProviderError as exc:
+                    report.add(
+                        "webhook_subscription",
+                        label,
+                        False,
+                        f"Could not read the subscribed apps ({exc.code}).",
+                        required=False,
                     )
         report.capabilities[Capability.MESSAGE.value] = report.ok
         report.external_account_id = self.creds.phone_number_id

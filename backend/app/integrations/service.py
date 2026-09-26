@@ -239,7 +239,7 @@ async def view_for(
     record = await get_record(session, principal.company_id, provider)
     connected = (
         await user_connected(session, principal, provider)
-        if provider == Provider.MICROSOFT_TEAMS
+        if provider in (Provider.MICROSOFT_TEAMS, Provider.GOOGLE_MEET)
         else None
     )
     if record is not None and record.mode == IntegrationMode.MOCK:
@@ -411,7 +411,12 @@ async def run_test(
     if record is None:
         raise NotFoundError("Configure this integration first")
     try:
-        report = await _run_test(record, secrets_of(record))
+        if provider == Provider.GOOGLE_MEET:
+            from app.integrations import google_meet_service
+
+            report = await google_meet_service.test_connection(session, principal, record)
+        else:
+            report = await _run_test(record, secrets_of(record))
     except factory.CredentialsMissingError as exc:
         report = ConnectionReport()
         report.add("credentials", "Required credentials are present", False, f"Missing: {exc}")

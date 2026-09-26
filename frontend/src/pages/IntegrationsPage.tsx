@@ -32,6 +32,15 @@ const TEAMS_MESSAGES: Record<string, string> = {
   connect_failed: "Microsoft Teams could not be connected. Please try again.",
 };
 
+const GOOGLE_MEET_MESSAGES: Record<string, string> = {
+  connected: "Your Google account is connected for Google Meet.",
+  denied: "Google sign-in was cancelled.",
+  invalid_state: "The sign-in link expired. Please try again.",
+  MEET_SCOPE_MISSING: "Google did not grant the Meet permissions. Please allow all requested permissions.",
+  MEET_NO_REFRESH_TOKEN: "Google did not grant offline access. Please try again.",
+  connect_failed: "Google Meet could not be connected. Please try again.",
+};
+
 export function IntegrationsPage() {
   const { session } = useAuth();
   const isAdmin = session?.role === "OWNER" || session?.role === "ADMIN";
@@ -39,6 +48,7 @@ export function IntegrationsPage() {
   const list = useQuery({ queryKey: ["integrations"], queryFn: integrationsApi.list });
   const [open, setOpen] = useState<string | null>(null);
   const teamsResult = params.get("teams");
+  const meetResult = params.get("google_meet");
   const consent = params.get("consent");
 
   return (
@@ -58,6 +68,11 @@ export function IntegrationsPage() {
       {teamsResult ? (
         <div role="status" className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
           {TEAMS_MESSAGES[teamsResult] ?? "Microsoft Teams could not be connected."}
+        </div>
+      ) : null}
+      {meetResult ? (
+        <div role="status" className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
+          {GOOGLE_MEET_MESSAGES[meetResult] ?? "Google Meet could not be connected."}
         </div>
       ) : null}
       {consent ? (
@@ -157,6 +172,7 @@ function IntegrationPanel({ slug, isAdmin }: { slug: string; isAdmin: boolean })
             <Requirements detail={detail.data} />
             {isAdmin ? <Actions detail={detail.data} onChange={update} /> : null}
             {slug === "microsoft-teams" && detail.data.mode === "LIVE" ? <TeamsUserConnection isAdmin={isAdmin} /> : null}
+            {slug === "google-meet" && detail.data.mode === "LIVE" ? <GoogleMeetUserConnection /> : null}
             <SetupInfo detail={detail.data} />
             {detail.data.mode === "MOCK" ? <DeveloperControls detail={detail.data} /> : null}
           </div>
@@ -385,6 +401,46 @@ function TeamsUserConnection({ isAdmin }: { isAdmin: boolean }) {
       {connect.error || consent.error || disconnect.error ? (
         <Alert>{errorMessage(connect.error ?? consent.error ?? disconnect.error)}</Alert>
       ) : null}
+    </Card>
+  );
+}
+
+function GoogleMeetUserConnection() {
+  const queryClient = useQueryClient();
+  const conn = useQuery({ queryKey: ["google-meet-connection"], queryFn: integrationsApi.googleMeetConnection });
+  const connect = useMutation({
+    mutationFn: integrationsApi.googleMeetConnect,
+    onSuccess: ({ authorization_url }) => window.location.assign(authorization_url),
+  });
+  const disconnect = useMutation({
+    mutationFn: integrationsApi.googleMeetDisconnect,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["google-meet-connection"] }),
+  });
+  return (
+    <Card title="Your Google account (Google Meet)">
+      <p className="mb-2 text-sm text-slate-600">
+        {conn.data?.connected
+          ? `Connected as ${conn.data.account_email ?? "your Google account"}.`
+          : conn.data?.status === "REAUTH_REQUIRED"
+            ? "Your Google sign-in expired. Connect again."
+            : "Connect the Google account you use in Google Meet. The copilot only receives meeting audio while you run it on a meeting you are in."}
+      </p>
+      <p className="mb-2 text-xs text-slate-500">
+        Requested permissions: read meeting-space details, and receive live meeting audio (Meet Media API, a Google
+        Developer Preview — your Google Cloud project, your account and all participants must be enrolled).
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {conn.data?.connected ? (
+          <Button variant="secondary" onClick={() => disconnect.mutate()} disabled={disconnect.isPending}>
+            Disconnect my Google account
+          </Button>
+        ) : (
+          <Button onClick={() => connect.mutate()} disabled={connect.isPending}>
+            Connect Google Account
+          </Button>
+        )}
+      </div>
+      {connect.error || disconnect.error ? <Alert>{errorMessage(connect.error ?? disconnect.error)}</Alert> : null}
     </Card>
   );
 }

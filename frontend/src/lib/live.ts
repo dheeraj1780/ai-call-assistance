@@ -85,7 +85,7 @@ export interface LiveSnapshot {
     session_phase?: "input_finished" | "stt_drained" | "closed";
   };
   simulation_available: boolean;
-  channel?: "PHONE" | "TEAMS";
+  channel?: "PHONE" | "TEAMS" | "GOOGLE_MEET";
   transcript_persistence?: "PERSISTED" | "TRANSIENT" | "PENDING_RECORDING_STATUS";
 }
 

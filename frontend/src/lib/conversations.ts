@@ -40,6 +40,8 @@ export interface Draft {
   status: "SUGGESTED" | "SENT" | "DISCARDED";
   warnings: string[];
   ai_provider: string | null;
+  /** Company-knowledge documents the draft relies on (empty = none used). */
+  knowledge_sources?: { document_id: string; title: string; score: number | null }[];
   created_at: string;
 }
 
@@ -77,6 +79,11 @@ export const conversationsApi = {
     apiFetch<Message>(`/api/v1/conversations/${id}/messages`, { method: "POST", body }),
   updateDraft: (id: string, draftId: string, body: { status?: "DISCARDED"; body?: string }) =>
     apiFetch<Draft>(`/api/v1/conversations/${id}/drafts/${draftId}`, { method: "PATCH", body }),
+  createContact: (id: string, name?: string) =>
+    apiFetch<ConversationSession>(`/api/v1/conversations/${id}/contact`, {
+      method: "POST",
+      body: name ? { name } : {},
+    }),
   link: (id: string, contact_id: string) =>
     apiFetch<ConversationSession>(`/api/v1/conversations/${id}/link`, {
       method: "POST",

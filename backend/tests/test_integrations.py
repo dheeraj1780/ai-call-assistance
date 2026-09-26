@@ -45,7 +45,7 @@ async def test_list_shows_all_providers_not_configured(client: AsyncClient, admi
     resp = await client.get("/api/v1/integrations", headers=admin.headers)
     assert resp.status_code == 200
     items = {i["slug"]: i for i in resp.json()}
-    assert set(items) == {"microsoft-teams", "whatsapp", "plivo"}
+    assert set(items) == {"microsoft-teams", "whatsapp", "plivo", "google-meet"}
     assert all(i["status"] == "NOT_CONFIGURED" for i in items.values())
     voice = capability(items["whatsapp"], "WHATSAPP_VOICE_CALL")
     assert voice["state"] == "NOT_AVAILABLE"

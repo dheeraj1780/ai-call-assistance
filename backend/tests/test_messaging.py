@@ -13,13 +13,14 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 
 from app.ai.gateway import set_ai_provider
 from app.ai.mock_provider import MockAIProvider
 from app.ai.provider import AIUnavailableError
 from app.common.config import get_settings
 from app.common.db import TenantContext
+from app.conversations import service as conversation_service
 from app.conversations.models import CommunicationMessage, CommunicationSession, ContactIdentity
 from app.integrations.models import IntegrationUserConnection
 from app.integrations.providers.teams import MockTeamsMessageProvider, client_state_for
@@ -816,3 +817,401 @@ async def test_teams_notifications_validation_and_message_fetch(
     async with session:
         ident = await session.scalar(select(ContactIdentity.kind))
     assert ident == "TEAMS_CHAT"
+
+
+# ---- WhatsApp POC hardening: Meta error codes, webhook retry after a processing failure,
+# creating a contact for an unknown sender, webhook-subscription check -------------------------
+
+
+async def _open_conversation(client: AsyncClient, owner: Account, wa: dict[str, Any]) -> str:
+    await contact(client, owner)
+    await deliver(client, wa["id"], wa_payload(wa_id=WA_ID, text="Hi", message_id="wamid.in1"))
+    [conv] = await conversations(client, owner)
+    return str(conv["id"])
+
+
+async def _send(client: AsyncClient, owner: Account, conv_id: str) -> httpx.Response:
+    return await client.post(
+        f"/api/v1/conversations/{conv_id}/messages",
+        headers=owner.headers,
+        json={"text": "Hello", "client_message_id": str(uuid.uuid4())},
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "meta_code", "http", "code", "phrase"),
+    [
+        (400, 131030, 502, "message_send_failed", "allowed recipient list"),
+        (400, 131047, 502, "whatsapp_window_closed", "24 hours"),
+        (400, 131026, 502, "message_send_failed", "could not deliver"),
+        (400, 130429, 429, "message_rate_limited", "rate limit"),
+        (429, 80007, 429, "message_rate_limited", "rate limit"),
+    ],
+)
+async def test_meta_error_codes_give_clear_reasons(
+    client: AsyncClient,
+    owner: Account,
+    wa_live: dict[str, Any],
+    status: int,
+    meta_code: int,
+    http: int,
+    code: str,
+    phrase: str,
+) -> None:
+    conv_id = await _open_conversation(client, owner, wa_live)
+    wa_live["fake"].on(
+        "POST",
+        "/111222333/messages",
+        httpx.Response(status, json={"error": {"code": meta_code, "message": "(Meta text)"}}),
+    )
+    resp = await _send(client, owner, conv_id)
+    assert resp.status_code == http, resp.text
+    err = resp.json()["error"]
+    assert err["code"] == code
+    assert phrase in err["message"]
+    detail = (await client.get(f"/api/v1/conversations/{conv_id}", headers=owner.headers)).json()
+    failed = detail["messages"][-1]
+    assert failed["status"] == "FAILED"
+    if http != 429:
+        assert failed["error_code"] == f"meta:{meta_code}"
+    integ = (await client.get("/api/v1/integrations/whatsapp", headers=owner.headers)).json()
+    assert integ["status"] != "ERROR"  # a per-message problem does not flag the integration
+
+
+async def test_webhook_is_retried_after_a_processing_failure(
+    client: AsyncClient, owner: Account, wa_live: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await contact(client, owner)
+    real_ingest = conversation_service.ingest
+    calls = {"n": 0}
+
+    async def flaky_ingest(*args: Any, **kwargs: Any) -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("database hiccup")
+        return await real_ingest(*args, **kwargs)
+
+    monkeypatch.setattr(conversation_service, "ingest", flaky_ingest)
+    body = wa_payload(wa_id=WA_ID, text="Do you have stock?", message_id="wamid.retry1")
+    first = await deliver(client, wa_live["id"], body)
+    assert first.status_code == 500  # Meta retries non-2xx deliveries
+    retry = await deliver(client, wa_live["id"], body)
+    assert retry.status_code == 200
+    assert retry.json()["applied"] == 1  # processed, not dropped as a duplicate
+    again = await deliver(client, wa_live["id"], body)
+    assert again.json()["duplicate"] == 1
+    session = await open_session(TenantContext(company_id=owner.company_id))
+    async with session:
+        n = await session.scalar(select(func.count()).select_from(CommunicationMessage))
+    assert n == 1
+
+
+async def test_create_contact_for_unknown_sender(
+    client: AsyncClient, owner: Account, wa_live: dict[str, Any]
+) -> None:
+    await deliver(
+        client,
+        wa_live["id"],
+        wa_payload(wa_id="918888877777", text="Hello", message_id="wamid.u1", name="Priya"),
+    )
+    [conv] = await conversations(client, owner)
+    assert conv["match_status"] == "UNMATCHED"
+    resp = await client.post(
+        f"/api/v1/conversations/{conv['id']}/contact", headers=owner.headers, json={}
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["match_status"] == "MATCHED"
+    contacts = (await client.get("/api/v1/contacts", headers=owner.headers)).json()["items"]
+    [created] = [c for c in contacts if c["name"] == "Priya"]
+    assert created["phone"] == "+918888877777"
+    timeline = (
+        await client.get(f"/api/v1/contacts/{created['id']}/timeline", headers=owner.headers)
+    ).json()
+    assert {"CONTACT_CREATED", "CONVERSATION_LINKED"} <= {
+        e["event_type"] for e in timeline["items"]
+    }
+    # The identity is remembered: the next message goes straight to this contact's timeline.
+    await deliver(
+        client,
+        wa_live["id"],
+        wa_payload(wa_id="918888877777", text="Price?", message_id="wamid.u2"),
+    )
+    await drain()
+    timeline = (
+        await client.get(f"/api/v1/contacts/{created['id']}/timeline", headers=owner.headers)
+    ).json()
+    assert "MESSAGE_RECEIVED" in {e["event_type"] for e in timeline["items"]}
+    session = await open_session(TenantContext(company_id=owner.company_id))
+    async with session:
+        identity = await session.scalar(select(ContactIdentity))
+    assert identity is not None
+    assert identity.value == "918888877777"
+    twice = await client.post(
+        f"/api/v1/conversations/{conv['id']}/contact", headers=owner.headers, json={}
+    )
+    assert twice.status_code == 409  # already linked: no duplicate contacts
+
+
+async def test_ambiguous_sender_cannot_create_another_contact(
+    client: AsyncClient, owner: Account, wa_live: dict[str, Any]
+) -> None:
+    await contact(client, owner, name="Ravi A")
+    await contact(client, owner, name="Ravi B")
+    await deliver(client, wa_live["id"], wa_payload(wa_id=WA_ID, text="Hi", message_id="wamid.a1"))
+    [conv] = await conversations(client, owner)
+    assert conv["match_status"] == "AMBIGUOUS"
+    resp = await client.post(
+        f"/api/v1/conversations/{conv['id']}/contact", headers=owner.headers, json={}
+    )
+    assert resp.status_code == 409
+
+
+async def test_connection_test_reports_webhook_subscription(
+    client: AsyncClient, owner: Account, wa_live: dict[str, Any]
+) -> None:
+    report = (await client.post("/api/v1/integrations/whatsapp/test", headers=owner.headers)).json()
+    checks = {c["key"]: c for c in report["last_test"]["checks"]}
+    assert checks["webhook_subscription"]["ok"] is False  # not mocked -> unknown / missing
+    assert checks["webhook_subscription"]["required"] is False
+    assert report["last_test"]["ok"] is True
+    wa_live["fake"].on(
+        "GET",
+        "/444555666/subscribed_apps",
+        httpx.Response(200, json={"data": [{"whatsapp_business_api_data": {"id": "app"}}]}),
+    )
+    report = (await client.post("/api/v1/integrations/whatsapp/test", headers=owner.headers)).json()
+    checks = {c["key"]: c for c in report["last_test"]["checks"]}
+    assert checks["webhook_subscription"]["ok"] is True
+
+
+# ---- WhatsApp reply suggestions from a real LLM adapter (Gemini, HTTP mocked) -----------------
+
+
+def _gemini(handler: Any) -> Any:
+    from app.ai.gemini_provider import GeminiProvider
+    from app.ai.provider import AITask
+
+    return GeminiProvider(
+        "AIza-TEST-KEY",
+        dict.fromkeys(AITask, "gemini-3.8-flash"),
+        transport=httpx.MockTransport(handler),
+    )
+
+
+async def test_whatsapp_suggestion_from_gemini_is_a_draft_only(
+    client: AsyncClient, owner: Account, wa_live: dict[str, Any]
+) -> None:
+    import json
+
+    prompts: list[str] = []
+
+    def gemini(request: httpx.Request) -> httpx.Response:
+        prompts.append(json.loads(request.content)["contents"][0]["parts"][0]["text"])
+        reply = {
+            "reply": "Namaste Ravi ji, thank you. I will confirm the price for 100 units today."
+        }
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"text": json.dumps(reply)}]}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {"promptTokenCount": 200, "candidatesTokenCount": 30},
+            },
+        )
+
+    set_ai_provider(_gemini(gemini))
+    await contact(client, owner)
+    await deliver(
+        client,
+        wa_live["id"],
+        wa_payload(wa_id=WA_ID, text="Price for 100 units?", message_id="wamid.g1"),
+    )
+    await drain()
+    [conv] = await conversations(client, owner)
+    detail = (await client.get(f"/api/v1/conversations/{conv['id']}", headers=owner.headers)).json()
+    [draft] = detail["drafts"]
+    assert draft["body"].startswith("Namaste Ravi ji")
+    assert draft["status"] == "SUGGESTED"
+    assert draft["ai_provider"] == "gemini"
+    # The prompt carries the conversation, the customer and the latest message as data.
+    assert "Price for 100 units?" in prompts[0]
+    assert "Ravi Kumar" in prompts[0]
+    assert "Acme Traders" in prompts[0]  # your company
+    # Nothing was sent to the customer: sending stays a human action.
+    assert wa_live["fake"].calls("POST", "/messages") == []
+    assert [m["direction"] for m in detail["messages"]] == ["INBOUND"]
+
+
+async def test_gemini_outage_keeps_the_message_and_creates_no_draft(
+    client: AsyncClient, owner: Account, wa_live: dict[str, Any]
+) -> None:
+    set_ai_provider(
+        _gemini(lambda r: httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}}))
+    )
+    await contact(client, owner)
+    await deliver(
+        client, wa_live["id"], wa_payload(wa_id=WA_ID, text="Hello?", message_id="wamid.g2")
+    )
+    await drain()
+    [conv] = await conversations(client, owner)
+    detail = (await client.get(f"/api/v1/conversations/{conv['id']}", headers=owner.headers)).json()
+    assert len(detail["messages"]) == 1
+    assert detail["drafts"] == []
+    assert wa_live["fake"].calls("POST", "/messages") == []
+
+
+# ---- RAG: company knowledge -> Gemini -> draft (Gemini and embeddings mocked) -------------------
+
+
+KB_TEXT = (
+    "Acme Inventory Suite pricing.\n\n"
+    "The Basic plan costs Rs 2,500 per month for up to 5 branches, billed annually.\n\n"
+    "Onboarding takes two days and includes Excel data migration."
+)
+
+
+async def _kb_ready(client: AsyncClient, acct: Account) -> None:
+    resp = await client.post(
+        "/api/v1/knowledge/documents",
+        headers=acct.headers,
+        files={"file": ("pricing.txt", KB_TEXT.encode(), "text/plain")},
+        data={"title": "Price list"},
+    )
+    assert resp.status_code == 201, resp.text
+    await drain()
+
+
+def _gemini_replying(prompts: list[str], reply: dict[str, Any]) -> Any:
+    import json
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        prompts.append(json.loads(request.content)["contents"][0]["parts"][0]["text"])
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"text": json.dumps(reply)}]}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {"promptTokenCount": 300, "candidatesTokenCount": 40},
+            },
+        )
+
+    return _gemini(handler)
+
+
+def _chunk_id_in(prompt: str) -> str:
+    import re
+
+    match = re.search(r"\[id=([0-9a-f-]{36})\]", prompt)
+    assert match, prompt
+    return match.group(1)
+
+
+async def test_relevant_knowledge_reaches_gemini_and_is_cited_on_the_draft(
+    client: AsyncClient, owner: Account, wa_live: dict[str, Any]
+) -> None:
+    await _kb_ready(client, owner)
+    prompts: list[str] = []
+
+    class Citing:
+        """Gemini (mocked) that cites the first excerpt it was given, plus an invented id."""
+
+        name = "gemini"
+
+        async def generate(self, **kw: Any) -> Any:
+            chunk = _chunk_id_in(kw["prompt"])
+            reply = {
+                "reply": "The Basic plan is Rs 2,500 per month for up to 5 branches.",
+                "knowledge_used": True,
+                "knowledge_chunk_ids": [chunk, "00000000-0000-0000-0000-000000000000"],
+            }
+            return await _gemini_replying(prompts, reply).generate(**kw)
+
+    set_ai_provider(Citing())
+    await contact(client, owner)
+    await deliver(
+        client,
+        wa_live["id"],
+        wa_payload(wa_id=WA_ID, text="What does the Basic plan cost?", message_id="wamid.kb1"),
+    )
+    await drain()
+    [conv] = await conversations(client, owner)
+    detail = (await client.get(f"/api/v1/conversations/{conv['id']}", headers=owner.headers)).json()
+    [draft] = detail["drafts"]
+    assert draft["body"].startswith("The Basic plan is Rs 2,500")
+    # Only the really retrieved excerpt is recorded; the invented id is dropped.
+    assert [s["title"] for s in draft["knowledge_sources"]] == ["Price list"]
+    assert "Rs 2,500 per month" in prompts[0]  # the retrieved excerpt was sent
+    assert "NO RELEVANT COMPANY KNOWLEDGE" not in prompts[0]
+    assert "embedding" not in str(detail).lower()  # no vectors are exposed
+    assert wa_live["fake"].calls("POST", "/messages") == []  # still a draft only
+
+
+async def test_unrelated_question_tells_gemini_there_is_no_company_knowledge(
+    client: AsyncClient, owner: Account, wa_live: dict[str, Any]
+) -> None:
+    await _kb_ready(client, owner)
+    prompts: list[str] = []
+    set_ai_provider(
+        _gemini_replying(
+            prompts,
+            {
+                "reply": "Thanks for asking - let me check and confirm this for you.",
+                "knowledge_used": True,  # a model claiming knowledge it was not given
+                "knowledge_chunk_ids": ["11111111-1111-1111-1111-111111111111"],
+            },
+        )
+    )
+    await contact(client, owner)
+    await deliver(
+        client,
+        wa_live["id"],
+        wa_payload(
+            wa_id=WA_ID, text="Can you ship spare parts to Dubai next week?", message_id="wamid.kb2"
+        ),
+    )
+    await drain()
+    [conv] = await conversations(client, owner)
+    detail = (await client.get(f"/api/v1/conversations/{conv['id']}", headers=owner.headers)).json()
+    [draft] = detail["drafts"]
+    assert "NO RELEVANT COMPANY KNOWLEDGE WAS FOUND" in prompts[0]
+    assert "Rs 2,500" not in prompts[0]  # irrelevant knowledge is not sent
+    assert draft["knowledge_sources"] == []
+
+
+async def test_another_tenants_knowledge_never_reaches_the_prompt(
+    client: AsyncClient, owner: Account, wa_live: dict[str, Any], register: Any
+) -> None:
+    rival = await register(client, "rival-kb@example.com", "Rival Co")
+    await _kb_ready(client, rival)  # the rival's price list
+    prompts: list[str] = []
+    set_ai_provider(_gemini_replying(prompts, {"reply": "Let me check and confirm."}))
+    await contact(client, owner)
+    await deliver(
+        client,
+        wa_live["id"],
+        wa_payload(wa_id=WA_ID, text="What does the Basic plan cost?", message_id="wamid.kb3"),
+    )
+    await drain()
+    assert prompts
+    assert "Rs 2,500" not in prompts[0]
+    assert "NO RELEVANT COMPANY KNOWLEDGE WAS FOUND" in prompts[0]
+
+
+async def test_mock_provider_still_drafts_with_knowledge_sources(
+    client: AsyncClient, owner: Account, wa_live: dict[str, Any]
+) -> None:
+    await _kb_ready(client, owner)  # default MockAIProvider from conftest
+    await contact(client, owner)
+    await deliver(
+        client,
+        wa_live["id"],
+        wa_payload(wa_id=WA_ID, text="What does the Basic plan cost?", message_id="wamid.kb4"),
+    )
+    await drain()
+    [conv] = await conversations(client, owner)
+    detail = (await client.get(f"/api/v1/conversations/{conv['id']}", headers=owner.headers)).json()
+    [draft] = detail["drafts"]
+    assert draft["ai_provider"] == "mock"
+    assert [s["title"] for s in draft["knowledge_sources"]] == ["Price list"]

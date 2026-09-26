@@ -4,6 +4,8 @@ PHONE: the company's Plivo integration when PHONE_CALL is enabled (LIVE -> Plivo
 mock telephony provider); otherwise the server fallback TELEPHONY_PROVIDER=mock (development).
 TEAMS: the company's Teams integration when REAL_TIME_CALL is enabled (LIVE -> media gateway,
 MOCK -> in-process mock gateway + simulator).
+GOOGLE_MEET: the company's Google Meet integration when REAL_TIME_CALL is enabled; the copilot
+attaches from the salesperson's browser (Meet Media API), see app/integrations/google_meet_service.
 """
 
 import uuid
@@ -46,6 +48,17 @@ async def resolve_for_start(
             ) from None
         return ResolvedCalling(provider, record.id, persistence)
 
+    if call.channel == CallChannel.GOOGLE_MEET:
+        record = await integrations.require_capability(
+            session, company_id, Provider.GOOGLE_MEET, Capability.REAL_TIME_CALL
+        )
+        persistence = (
+            TranscriptPersistence.PERSISTED
+            if record.config.get("call_persistence") == "PERSISTED"
+            else TranscriptPersistence.TRANSIENT
+        )
+        return ResolvedCalling(factory.google_meet_calling_provider(record), record.id, persistence)
+
     plivo = await integrations.capability_record(
         session, company_id, Provider.PLIVO, Capability.PHONE_CALL
     )
@@ -82,6 +95,9 @@ async def provider_for_call(
             )
         except factory.CredentialsMissingError:
             return None
+    if name in ("google-meet", "google-meet-mock"):
+        record = await integrations.get_record(session, company_id, Provider.GOOGLE_MEET)
+        return factory.google_meet_calling_provider(record) if record is not None else None
     if name in ("teams", "teams-mock"):
         record = await integrations.get_record(session, company_id, Provider.MICROSOFT_TEAMS)
         if record is None:

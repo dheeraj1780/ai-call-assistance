@@ -303,7 +303,53 @@ PLIVO = ProviderSpec(
     ),
 )
 
-SPECS: dict[Provider, ProviderSpec] = {s.provider: s for s in (TEAMS, WHATSAPP, PLIVO)}
+MEET_PERSISTENCE_OPTIONS = (
+    ("TRANSIENT", "Transient: live assistance only; nothing derived from meeting audio is stored"),
+    (
+        "PERSISTED",
+        "Store transcript & AI notes: only with the participants' consent (Google shows them "
+        "that an app is accessing the meeting)",
+    ),
+)
+
+GOOGLE_MEET = ProviderSpec(
+    provider=Provider.GOOGLE_MEET,
+    slug="google-meet",
+    name="Google Meet",
+    subtitle="Google Meet REST API + Meet Media API (Developer Preview)",
+    channel=Channel.GOOGLE_MEET,
+    docs="docs/integrations/google-meet.md",
+    fields=(
+        FieldSpec(
+            "call_persistence",
+            "Meeting transcript storage",
+            "select",
+            True,
+            "Transient mode shows live assistance only. Store the transcript only when the "
+            "participants have agreed.",
+            options=MEET_PERSISTENCE_OPTIONS,
+            default="TRANSIENT",
+            capabilities=(Capability.REAL_TIME_CALL,),
+        ),
+    ),
+    capabilities=(
+        CapabilitySpec(
+            Capability.REAL_TIME_CALL,
+            "Real-time Meeting Copilot",
+            "The copilot receives the live audio of a Google Meet you are in (Meet Media API, "
+            "listen-only) and assists you in real time.",
+            Channel.GOOGLE_MEET,
+        ),
+        CapabilitySpec(
+            Capability.MEETING_LOOKUP,
+            "Meeting lookup",
+            "Check a Google Meet link: does the meeting exist and has it started?",
+            Channel.GOOGLE_MEET,
+        ),
+    ),
+)
+
+SPECS: dict[Provider, ProviderSpec] = {s.provider: s for s in (TEAMS, WHATSAPP, PLIVO, GOOGLE_MEET)}
 
 
 @dataclass
@@ -415,6 +461,42 @@ def requirements(spec: ProviderSpec, ctx: RequirementContext) -> list[Requiremen
                 hint=stt_hint,
             ),
         ]
+    elif spec.provider == Provider.GOOGLE_MEET:
+        oauth_ok = bool(s.google_meet_client_id and s.google_meet_client_secret is not None)
+        reqs += [
+            Requirement(
+                "oauth_client",
+                "Google OAuth client for Meet (GOOGLE_MEET_CLIENT_ID / _SECRET)",
+                oauth_ok,
+                "server",
+                hint="Create a Web application OAuth client in the Google Cloud project and set "
+                "GOOGLE_MEET_CLIENT_ID / GOOGLE_MEET_CLIENT_SECRET on the server.",
+            ),
+            Requirement(
+                "user_connection",
+                "Your Google account connected (Meet scopes granted)",
+                bool(ctx.user_connected),
+                "user",
+                hint="Each salesperson connects the Google account they use in Meet.",
+            ),
+            Requirement(
+                "stt",
+                "Real-time speech-to-text provider",
+                stt_real,
+                "server",
+                Capability.REAL_TIME_CALL,
+                hint=stt_hint,
+            ),
+            Requirement(
+                "developer_preview",
+                "Meet Media API Developer Preview access (confirmed by the first live connection)",
+                bool(ctx.config.get("media_verified_at")),
+                "provider",
+                Capability.REAL_TIME_CALL,
+                hint="The Google Cloud project, your Google account and all meeting participants "
+                "must be enrolled in the Google Workspace Developer Preview Program.",
+            ),
+        ]
     elif spec.provider == Provider.WHATSAPP:
         reqs += [
             Requirement(
@@ -469,6 +551,7 @@ def blocking_missing(reqs: list[Requirement], cap: Capability) -> list[Requireme
         if not r.ok
         and r.scope in BLOCKING_SCOPES
         and r.capability in (None, cap)
-        # Provider-side webhook registration is verified only after enabling.
-        and r.key != "webhook_verified"
+        # Provider-side facts that can only be confirmed after enabling (webhook delivery,
+        # Google's Developer Preview enrolment on the first real connection).
+        and r.key not in ("webhook_verified", "developer_preview")
     ]

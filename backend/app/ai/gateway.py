@@ -169,20 +169,69 @@ def _ms(start: float) -> int:
 _gateway: AIGateway | None = None
 
 
-def build_provider(settings: Settings) -> AIProvider:
-    if settings.ai_provider == "anthropic":
+def _provider_named(name: str, settings: Settings) -> AIProvider:
+    if name == "anthropic":
         from app.ai.anthropic_provider import AnthropicProvider
 
         if settings.anthropic_api_key is None:
-            raise RuntimeError("AI_PROVIDER=anthropic requires ANTHROPIC_API_KEY")
+            raise RuntimeError("anthropic requires ANTHROPIC_API_KEY")
         realtime = settings.ai_model_realtime
         models = {
             task: realtime if task in REALTIME_TASKS else settings.ai_model for task in AITask
         }
         return AnthropicProvider(settings.anthropic_api_key.get_secret_value(), models)
+    if name == "gemini":
+        from app.ai.gemini_provider import GeminiProvider
+
+        if settings.gemini_api_key is None:
+            raise RuntimeError("gemini requires GEMINI_API_KEY")
+        return GeminiProvider(
+            settings.gemini_api_key.get_secret_value(),
+            dict.fromkeys(AITask, settings.gemini_model),
+            thinking_level=settings.gemini_thinking_level or None,
+        )
     from app.ai.mock_provider import MockAIProvider
 
     return MockAIProvider()
+
+
+class TaskRoutingProvider:
+    """Sends some tasks to another provider (e.g. only MESSAGE_ASSIST to a real LLM)."""
+
+    def __init__(self, default: AIProvider, routes: dict[AITask, AIProvider]) -> None:
+        self.default = default
+        self.routes = routes
+        self.name = default.name
+
+    async def generate[T: BaseModel](
+        self,
+        *,
+        task: AITask,
+        system: str,
+        prompt: str,
+        schema: type[T],
+        context: BaseModel | None,
+        max_tokens: int,
+        timeout_seconds: float,
+    ) -> AIResult[T]:
+        provider = self.routes.get(task, self.default)
+        return await provider.generate(
+            task=task,
+            system=system,
+            prompt=prompt,
+            schema=schema,
+            context=context,
+            max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
+        )
+
+
+def build_provider(settings: Settings) -> AIProvider:
+    base = _provider_named(settings.ai_provider, settings)
+    assist = settings.ai_message_assist_provider
+    if assist in ("inherit", settings.ai_provider):
+        return base
+    return TaskRoutingProvider(base, {AITask.MESSAGE_ASSIST: _provider_named(assist, settings)})
 
 
 def get_ai_gateway() -> AIGateway:

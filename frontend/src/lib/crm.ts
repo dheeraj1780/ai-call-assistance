@@ -144,7 +144,7 @@ export interface Call {
   outcome_notes: string | null;
   next_step: string | null;
   provider?: string | null;
-  channel?: "PHONE" | "TEAMS";
+  channel?: "PHONE" | "TEAMS" | "GOOGLE_MEET";
   meeting_url?: string | null;
   transcript_persistence?: "PERSISTED" | "TRANSIENT" | "PENDING_RECORDING_STATUS";
   language?: string | null;
@@ -220,7 +220,7 @@ export const crm = {
     objective?: string;
     desired_outcome?: string;
     scheduled_at?: string;
-    channel?: "PHONE" | "TEAMS";
+    channel?: "PHONE" | "TEAMS" | "GOOGLE_MEET";
     meeting_url?: string;
     language?: "en-IN" | "en-US" | "hi-IN" | "de-DE";
   }) => apiFetch<Call>("/api/v1/calls", { method: "POST", body }),

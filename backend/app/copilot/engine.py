@@ -79,6 +79,13 @@ NOTE_MIN_CONFIDENCE = 0.6
 AGENDA_AI_MIN_CONFIDENCE = 0.7
 
 
+def may_be_customer(speaker: str) -> bool:
+    """Mixed audio without speaker attribution (Google Meet, Teams without the salesperson's
+    account) is UNKNOWN: it may be the customer, so customer-side extraction runs on it. The
+    resulting notes stay SUGGESTED until a person reviews them."""
+    return speaker in (Speaker.CUSTOMER, Speaker.UNKNOWN)
+
+
 @dataclass
 class SegmentView:
     id: uuid.UUID
@@ -150,7 +157,7 @@ def _mock_copilot(context: BaseModel | None) -> CopilotDelta:
         return CopilotDelta()
     notes: list[ExtractedNote] = []
     for seg in context.new_segments:
-        if seg["speaker"] != Speaker.CUSTOMER:
+        if not may_be_customer(seg["speaker"]):
             continue
         for d in detect(seg["text"], speaker_is_customer=True):
             notes.append(
@@ -258,7 +265,7 @@ class CopilotEngine:
     # -- deterministic --------------------------------------------------------------------
 
     async def _deterministic(self, seg: SegmentView) -> None:
-        detections = detect(seg.text, speaker_is_customer=seg.speaker == Speaker.CUSTOMER)
+        detections = detect(seg.text, speaker_is_customer=may_be_customer(seg.speaker))
         if not detections:
             return
         async with get_session_factory()() as session:
@@ -273,6 +280,9 @@ class CopilotEngine:
         text_key = f"{d.kind}:{short_hash(' '.join(d.text.lower().split()))}"
         if text_key in self._note_texts:
             return  # the same fact from another pass (deterministic vs AI) is shown once
+        # Reserve before awaiting: the per-segment pass and the background LLM pass run
+        # concurrently, and both must not store the same fact.
+        self._note_texts.add(text_key)
         if self.persist:
             note = await suggest_note(
                 session,
@@ -291,7 +301,6 @@ class CopilotEngine:
                 return
         elif not self._transient_note(d, key, source):
             return
-        self._note_texts.add(text_key)
         self.known_notes.append(f"{d.kind}: {d.text}")
         self._new_note_kinds.add(d.kind)
         card: tuple[InsightType, InsightPriority, str] | None = None
@@ -358,7 +367,7 @@ class CopilotEngine:
                 # fact extractor covers the topic: then the extracted fact completes it, and a
                 # passing keyword ("every *week*") only marks it as raised.
                 if (
-                    seg.speaker == Speaker.CUSTOMER
+                    may_be_customer(seg.speaker)
                     and word_count(seg.text) >= MIN_ANSWER_WORDS + 3
                     and not item.groups & set(NOTE_TOPIC.values())
                 ):
@@ -376,7 +385,7 @@ class CopilotEngine:
                 and item.raised_at is not None
                 and index > item.raised_at
                 and index - item.raised_at <= ANSWER_WINDOW
-                and seg.speaker == Speaker.CUSTOMER
+                and may_be_customer(seg.speaker)
                 and word_count(seg.text) >= MIN_ANSWER_WORDS
             ):
                 item.status = AgendaItemStatus.COMPLETED

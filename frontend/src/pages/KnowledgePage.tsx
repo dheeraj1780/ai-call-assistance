@@ -17,6 +17,10 @@ export interface KnowledgeDocument {
   status: "UPLOADED" | "PROCESSING" | "READY" | "FAILED";
   error_code: string | null;
   chunk_count: number;
+  mime_type?: string;
+  embedding_model?: string | null;
+  /** Embedded with a previous embedding model: not searched until re-processed. */
+  needs_reprocess?: boolean;
   created_at: string;
 }
 
@@ -36,6 +40,8 @@ const knowledgeApi = {
     return apiFetch<KnowledgeDocument>("/api/v1/knowledge/documents", { method: "POST", body: form });
   },
   remove: (id: string) => apiFetch<void>(`/api/v1/knowledge/documents/${id}`, { method: "DELETE" }),
+  reprocess: (id: string) =>
+    apiFetch<KnowledgeDocument>(`/api/v1/knowledge/documents/${id}/reprocess`, { method: "POST" }),
   ask: (question: string) => apiFetch<Answer>("/api/v1/knowledge/query", { method: "POST", body: { question } }),
 };
 
@@ -55,13 +61,17 @@ export function KnowledgePage() {
     mutationFn: knowledgeApi.remove,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["knowledge"] }),
   });
+  const reprocess = useMutation({
+    mutationFn: knowledgeApi.reprocess,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["knowledge"] }),
+  });
 
   return (
     <div className="space-y-4">
       <PageHeader title="Knowledge base" />
       <p className="text-sm text-slate-600">
-        Upload product guides, price lists or FAQs (PDF, DOCX, TXT). During calls the copilot shows matching
-        excerpts, clearly labelled as company knowledge. Original files are not stored — only the extracted text.
+        Upload product guides, price lists or FAQs (PDF, DOCX, TXT, Markdown). During calls and in customer
+        conversations the copilot uses matching excerpts, clearly labelled as company knowledge. Original files are not stored — only the extracted text.
       </p>
       {isAdmin ? <UploadCard /> : null}
       <AskCard />
@@ -78,10 +88,25 @@ export function KnowledgePage() {
                     {d.filename} · {(d.size_bytes / 1024).toFixed(0)} KB · {d.chunk_count} sections ·{" "}
                     {formatDateTime(d.created_at)}
                     {d.error_code ? ` · ${d.error_code}` : ""}
+                    {d.embedding_model ? ` · ${d.embedding_model}` : ""}
                   </p>
+                  {d.needs_reprocess ? (
+                    <p className="text-xs text-amber-700">
+                      Processed with a previous embedding model — not searched until re-processed.
+                    </p>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge value={d.status === "READY" ? "COMPLETED" : d.status === "FAILED" ? "FAILED" : "IN_PROGRESS"} />
+                  {isAdmin && (d.status === "FAILED" || d.needs_reprocess) ? (
+                    <button
+                      className="text-xs text-sky-700 underline"
+                      disabled={reprocess.isPending}
+                      onClick={() => reprocess.mutate(d.id)}
+                    >
+                      Re-process
+                    </button>
+                  ) : null}
                   {isAdmin ? (
                     <button className="text-xs text-rose-700 underline" onClick={() => remove.mutate(d.id)}>
                       Delete
@@ -113,7 +138,8 @@ function UploadCard() {
   function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!file) return setLocalError("Choose a file first.");
-    if (!/\.(pdf|docx|txt)$/i.test(file.name)) return setLocalError("Only PDF, DOCX and TXT files are supported.");
+    if (!/\.(pdf|docx|txt|md|markdown)$/i.test(file.name))
+      return setLocalError("Only PDF, DOCX, TXT and Markdown files are supported.");
     if (file.size > MAX_MB * 1024 * 1024) return setLocalError(`Files are limited to ${MAX_MB} MB.`);
     setLocalError(null);
     upload.mutate();
@@ -128,7 +154,7 @@ function UploadCard() {
           <input
             id="kb-file"
             type="file"
-            accept=".pdf,.docx,.txt"
+            accept=".pdf,.docx,.txt,.md,.markdown"
             className="block w-full text-sm"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />

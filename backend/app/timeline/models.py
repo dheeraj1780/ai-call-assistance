@@ -96,7 +96,8 @@ class TimelineEvent(UUIDPrimaryKeyMixin, TenantScopedMixin, CreatedAtMixin, Base
             name="fk_timeline_events_session",
         ),
         CheckConstraint(
-            "channel IS NULL OR channel IN ('PHONE', 'TEAMS', 'WHATSAPP')", name="channel_valid"
+            "channel IS NULL OR channel IN ('PHONE', 'TEAMS', 'WHATSAPP', 'GOOGLE_MEET')",
+            name="channel_valid",
         ),
         Index(
             "ix_timeline_events_contact_occurred",

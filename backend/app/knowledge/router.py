@@ -45,6 +45,17 @@ class DocumentOut(BaseModel):
     uploaded_by_user_id: uuid.UUID | None
     created_at: datetime
     processed_at: datetime | None
+    # READY but embedded with another model than the current EMBEDDING_PROVIDER: not searched
+    # until re-processed.
+    needs_reprocess: bool = False
+
+
+def _out(doc: KnowledgeDocument) -> DocumentOut:
+    out = DocumentOut.model_validate(doc)
+    out.needs_reprocess = (
+        doc.status == "READY" and doc.embedding_model != service.current_embedding_model()
+    )
+    return out
 
 
 class QueryIn(BaseModel):
@@ -70,13 +81,13 @@ class AnswerOut(BaseModel):
 @router.get("/documents", response_model=list[DocumentOut])
 async def list_documents(
     principal: Principal = Depends(get_principal), session: AsyncSession = Depends(get_db_session)
-) -> list[KnowledgeDocument]:
+) -> list[DocumentOut]:
     rows = await session.scalars(
         select(KnowledgeDocument)
         .where(KnowledgeDocument.company_id == principal.company_id)
         .order_by(KnowledgeDocument.created_at.desc())
     )
-    return list(rows.all())
+    return [_out(d) for d in rows.all()]
 
 
 @router.post("/documents", status_code=status.HTTP_201_CREATED, response_model=DocumentOut)
@@ -86,12 +97,12 @@ async def upload_document(
     title: str | None = Form(default=None, max_length=200),
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_db_session),
-) -> KnowledgeDocument:
+) -> DocumentOut:
     limit = get_settings().knowledge_max_upload_bytes
     data = await file.read(limit + 1)
     if len(data) > limit:
         raise AppError("File is too large", code="file_too_large").with_status(413)
-    return await service.upload(
+    doc = await service.upload(
         session,
         principal,
         filename=file.filename or "document",
@@ -99,6 +110,7 @@ async def upload_document(
         title=title,
         ip=client_ip(request),
     )
+    return _out(doc)
 
 
 @router.get("/documents/{document_id}", response_model=DocumentOut)
@@ -106,8 +118,20 @@ async def get_document(
     document_id: uuid.UUID,
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_db_session),
-) -> KnowledgeDocument:
-    return await service.get_document(session, principal, document_id)
+) -> DocumentOut:
+    return _out(await service.get_document(session, principal, document_id))
+
+
+@router.post("/documents/{document_id}/reprocess", response_model=DocumentOut)
+async def reprocess_document(
+    document_id: uuid.UUID,
+    request: Request,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_db_session),
+) -> DocumentOut:
+    """Re-embed a document (failed, or embedded with a previous embedding model)."""
+    doc = await service.reprocess_document(session, principal, document_id, ip=client_ip(request))
+    return _out(doc)
 
 
 @router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

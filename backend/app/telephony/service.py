@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit import service as audit
 from app.auth.dependencies import Principal
 from app.calls.models import (
+    MEETING_CHANNELS,
     TERMINAL_CALL_STATUSES,
     Call,
     CallChannel,
@@ -96,9 +97,10 @@ async def start_call(
     contact = await ContactRepository(session).get(principal.company_id, call.contact_id)
     user = await session.get(User, principal.user_id)
     teams = call.channel == CallChannel.TEAMS
+    meeting = call.channel in MEETING_CHANNELS
     if contact is None:
         raise MissingPhoneError("Contact not found")
-    if not teams:
+    if not meeting:
         if not contact.phone:
             raise MissingPhoneError("Add the customer's phone number before starting the call")
         if user is None or not user.phone:
@@ -106,7 +108,9 @@ async def start_call(
                 "Add your own phone number in your profile before starting a call"
             )
     elif not call.meeting_url:
-        raise InvalidStateError("A Teams call needs the meeting link")
+        raise InvalidStateError(
+            f"A {'Teams' if teams else 'Google Meet'} call needs the meeting link"
+        )
 
     resolved = await calling.resolve_for_start(session, principal.company_id, call)
     provider = resolved.provider

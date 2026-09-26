@@ -167,6 +167,19 @@ def _setup(view: service.IntegrationView) -> dict[str, Any]:
             ],
             "application_permissions": ["Calls.JoinGroupCall.All", "Calls.AccessMedia.All"],
         }
+    if view.spec.provider == Provider.GOOGLE_MEET:
+        from app.integrations import google_meet_service
+        from app.integrations.providers.google_meet import REQUIRED_SCOPES
+
+        return {
+            "oauth_redirect_uri": google_meet_service.redirect_uri(),
+            "oauth_client_type": "Web application",
+            "oauth_scopes": ["openid", "email", *REQUIRED_SCOPES],
+            "apis_to_enable": ["Google Meet REST API (meet.googleapis.com)"],
+            "developer_preview": "Meet Media API: the Google Cloud project, the OAuth user and all "
+            "meeting participants must be enrolled in the Google Workspace Developer Preview "
+            "Program.",
+        }
     return {
         "inbound_answer_url": f"{base}/api/v1/integrations/plivo/webhooks/{iid}/inbound"
         if iid

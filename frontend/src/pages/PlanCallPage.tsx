@@ -6,6 +6,7 @@ import { Card, PageHeader, QueryState, SelectField, TextArea } from "../componen
 import { Alert, Button, TextField } from "../components/ui";
 import { crm, localInputToIso } from "../lib/crm";
 import { errorMessage } from "../lib/errors";
+import { parseMeetingCode } from "../lib/meet/meetingCode";
 
 /** Plan a call for a contact: objective, desired outcome, optional schedule. */
 export function PlanCallPage() {
@@ -18,6 +19,7 @@ export function PlanCallPage() {
   const [when, setWhen] = useState("");
   const [params] = useSearchParams();
   const teams = params.get("channel") === "TEAMS";
+  const meet = params.get("channel") === "GOOGLE_MEET";
   const [meetingUrl, setMeetingUrl] = useState("");
   const [language, setLanguage] = useState<"en-IN" | "en-US" | "hi-IN" | "de-DE">("en-IN");
   const create = useMutation({
@@ -29,6 +31,7 @@ export function PlanCallPage() {
         scheduled_at: localInputToIso(when),
         language,
         ...(teams ? { channel: "TEAMS" as const, meeting_url: meetingUrl.trim() } : {}),
+        ...(meet ? { channel: "GOOGLE_MEET" as const, meeting_url: meetingUrl.trim() } : {}),
       }),
     onSuccess: (call) => {
       queryClient.invalidateQueries({ queryKey: ["calls"] });
@@ -43,7 +46,9 @@ export function PlanCallPage() {
   return (
     <QueryState isPending={contact.isPending} error={contact.error}>
       <div className="mx-auto max-w-2xl">
-        <PageHeader title={`Plan a ${teams ? "Teams call" : "call"} with ${contact.data?.name ?? ""}`} />
+        <PageHeader
+          title={`Plan a ${teams ? "Teams call" : meet ? "Google Meet call" : "call"} with ${contact.data?.name ?? ""}`}
+        />
         <Card>
           <form className="space-y-4" onSubmit={onSubmit}>
             {create.error ? <Alert>{errorMessage(create.error)}</Alert> : null}
@@ -69,6 +74,21 @@ export function PlanCallPage() {
                 required
                 maxLength={2000}
                 hint="The copilot bot joins this meeting listen-only. Participants see it in the meeting."
+                onChange={(e) => setMeetingUrl(e.target.value)}
+              />
+            ) : null}
+            {meet ? (
+              <TextField
+                label="Google Meet link"
+                placeholder="https://meet.google.com/abc-defg-hij"
+                value={meetingUrl}
+                required
+                maxLength={2000}
+                hint={
+                  meetingUrl && !parseMeetingCode(meetingUrl)
+                    ? "Not a Google Meet link or meeting code."
+                    : "You join the meeting yourself; the copilot then receives its audio listen-only (Meet Media API)."
+                }
                 onChange={(e) => setMeetingUrl(e.target.value)}
               />
             ) : null}

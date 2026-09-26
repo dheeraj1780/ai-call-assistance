@@ -33,7 +33,7 @@ router = APIRouter(tags=["telephony"])
 
 MAX_WEBHOOK_BYTES = 64 * 1024
 SIMULATABLE_PROVIDERS = {"mock", "teams-mock"}
-MEDIA_PROVIDERS = {"mock", "plivo", "teams", "teams-mock"}
+MEDIA_PROVIDERS = {"mock", "plivo", "teams", "teams-mock", "google-meet", "google-meet-mock"}
 
 
 @router.post(

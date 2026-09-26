@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { MeetCopilotPanel } from "../components/MeetCopilotPanel";
 import { Link, useParams } from "react-router";
 
 import { Badge, QueryState } from "../components/common";
@@ -50,6 +51,13 @@ export function LiveCallPage() {
         <div className="space-y-3">
           <Header state={state} connection={connection} busy={busy} run={run} callId={id} />
           {actionError ? <Alert>{errorMessage(actionError)}</Alert> : null}
+          {(state.channel ?? state.call.channel) === "GOOGLE_MEET" ? (
+            <MeetCopilotPanel
+              callId={id}
+              callLive={LIVE_STATUSES.has(state.call.status)}
+              meetingUrl={state.call.meeting_url ?? null}
+            />
+          ) : null}
           <PipelineBanner state={state} />
           <TranscriptHealth state={state} />
           <FinalisingNotice state={state} />
@@ -107,6 +115,12 @@ function useElapsed(startedAt: string | null, endedAt: string | null): string {
   return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
+function channelLabel(channel: string | undefined): string {
+  if (channel === "TEAMS") return "Microsoft Teams";
+  if (channel === "GOOGLE_MEET") return "Google Meet";
+  return "Phone";
+}
+
 function Header({
   state,
   connection,
@@ -128,7 +142,7 @@ function Header({
     <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Live call · Channel: {state.channel === "TEAMS" || call.channel === "TEAMS" ? "Microsoft Teams" : "Phone"}
+          Live call · Channel: {channelLabel(state.channel ?? call.channel)}
         </p>
         <div className="flex items-center gap-2">
           <Link to={`/contacts/${call.contact.id}`} className="truncate text-lg font-semibold text-slate-900">

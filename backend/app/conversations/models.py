@@ -401,6 +401,11 @@ class MessageDraft(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base)
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
     ai_provider: Mapped[str | None] = mapped_column(String(32))
+    # Company-knowledge excerpts the draft relies on: [{document_id, title, chunk_id, score}].
+    knowledge_sources: Mapped[list[dict[str, str]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    prompt_version: Mapped[str | None] = mapped_column(String(40))
     reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

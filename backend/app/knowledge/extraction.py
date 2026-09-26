@@ -5,6 +5,8 @@ Validation is by content (magic bytes / structure), not by the client-supplied M
 - DOCX: a ZIP containing ``word/document.xml``; entry-count and uncompressed-size limits
   (zip-bomb guard); macros are irrelevant because we only read text.
 - TXT: UTF-8 (BOM allowed), no NUL bytes.
+- Markdown (.md/.markdown): UTF-8 text; markup (headings, emphasis, links, images, code fences)
+  is reduced to its readable text.
 """
 
 import io
@@ -22,6 +24,8 @@ CHUNK_OVERLAP = 150
 ALLOWED_EXTENSIONS = {
     ".pdf": "application/pdf",
     ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 
@@ -34,7 +38,7 @@ class ExtractionError(Exception):
 
 @dataclass(frozen=True)
 class ExtractedDocument:
-    kind: str  # pdf | docx | txt
+    kind: str  # pdf | docx | txt | md | markdown
     mime_type: str
     text: str
 
@@ -111,10 +115,24 @@ def _txt(data: bytes) -> str:
         raise ExtractionError("not_utf8", "Text files must be UTF-8 encoded") from exc
 
 
+def _markdown(text: str) -> str:
+    text = re.sub(r"^```[^\n]*$", "", text, flags=re.M)  # fence lines; code text is kept
+    text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)  # images -> alt text
+    text = re.sub(r"\[([^\]]+)\]\(([^)\s]+)[^)]*\)", r"\1 (\2)", text)  # links -> text (url)
+    text = re.sub(r"^\s{0,3}#{1,6}\s+", "", text, flags=re.M)  # headings
+    text = re.sub(r"^\s{0,3}>\s?", "", text, flags=re.M)  # block quotes
+    text = re.sub(r"^\s*[-*+]\s+", "- ", text, flags=re.M)  # bullets
+    text = re.sub(r"(\*\*|__|\*|_|`)(\S(?:.*?\S)?)\1", r"\2", text)  # emphasis / inline code
+    text = re.sub(r"^\s*([-*_]\s*){3,}$", "", text, flags=re.M)  # horizontal rules
+    return text
+
+
 def extract(filename: str, data: bytes) -> ExtractedDocument:
     ext = _extension(filename)
     if ext not in ALLOWED_EXTENSIONS:
-        raise ExtractionError("unsupported_type", "Only PDF, DOCX and TXT files are supported")
+        raise ExtractionError(
+            "unsupported_type", "Only PDF, DOCX, TXT and Markdown files are supported"
+        )
     if ext == ".pdf":
         if not data.startswith(b"%PDF-"):
             raise ExtractionError("content_mismatch", "The file content is not a PDF")
@@ -123,6 +141,8 @@ def extract(filename: str, data: bytes) -> ExtractedDocument:
         if not data.startswith(b"PK\x03\x04"):
             raise ExtractionError("content_mismatch", "The file content is not a DOCX document")
         text = _docx(data)
+    elif ext in (".md", ".markdown"):
+        text = _markdown(_txt(data))
     else:
         text = _txt(data)
     text = _clean(text)

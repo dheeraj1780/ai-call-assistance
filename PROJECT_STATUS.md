@@ -9,7 +9,21 @@ _Last updated: 2026-09-25 (local call copilot verified with real Google STT)._ T
 - **Next step:** controlled real-provider tests, one provider at a time, with the user's
   credentials (see `docs/integrations/testing.md`); then a deployment/Render verification phase.
 
-## Teams real-time call copilot — primary POC (2026-09-25)
+## Google Meet real-time meeting copilot — current focus (2026-09-25)
+
+Teams is **ON HOLD** (until a Microsoft 365 work/school tenant exists; code unchanged, Azure VM left as is). Plivo untouched.
+Details: `docs/integrations/google-meet.md`, `GOOGLE-MEET-CREDENTIALS-REQUIRED.md`, `REAL-GOOGLE-MEET-TEST.md`.
+
+| Item | Status |
+|---|---|
+| Google Meet provider/channel, per-user OAuth (encrypted refresh token), meeting lookup, Media API signalling proxy, session events, migration 0010 | IMPLEMENTED · PASS (41 backend tests, Google mocked) |
+| Browser bridge: Google's Meet Media API reference client (vendored), 16 kHz PCM mixing → existing media WebSocket → Chirp 3 → copilot | IMPLEMENTED · PASS (unit/component tests with fakes) |
+| Settings → Integrations card, plan Google Meet call, live-screen Meet panel | IMPLEMENTED · tests |
+| Real Google OAuth / Meet API / Media API / real meeting audio | **NOT VERIFIED** — needs OAuth client + Developer Preview enrolment |
+| Personal Gmail eligibility for the Developer Preview | **UNVERIFIED — possible blocker** |
+| Speaker attribution for Meet | NOT IMPLEMENTED (mixed audio, speaker Unknown) |
+
+## Teams real-time call copilot — ON HOLD (2026-09-25)
 
 Plivo is intentionally paused (adapter unchanged). Details: `docs/integrations/teams-call-copilot.md`,
 `docs/integrations/google-stt.md`, `teams-media-gateway/README.md`.

@@ -69,6 +69,10 @@ os.environ.update(
         "TELEPHONY_PROVIDER": "mock",
         "CALENDAR_PROVIDER": "mock",
         "EMBEDDING_PROVIDER": "hashing",
+        # ... and never a real LLM for message assistance, even when .env enables Gemini.
+        "AI_MESSAGE_ASSIST_PROVIDER": "inherit",
+        "PUBLIC_BASE_URL": "http://localhost:8000",
+        "TOKEN_ENCRYPTION_KEY": "test-token-key-" + "y" * 40,
     }
 )
 

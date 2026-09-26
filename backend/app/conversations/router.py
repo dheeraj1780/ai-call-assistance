@@ -72,6 +72,12 @@ class MessageOut(BaseModel):
     occurred_at: datetime
 
 
+class KnowledgeSourceOut(BaseModel):
+    document_id: uuid.UUID
+    title: str
+    score: float | None = None
+
+
 class DraftOut(BaseModel):
     id: uuid.UUID
     reply_to_message_id: uuid.UUID | None
@@ -80,6 +86,8 @@ class DraftOut(BaseModel):
     status: str
     warnings: list[str]
     ai_provider: str | None
+    # "Based on company knowledge": the documents the draft relies on (empty = none used).
+    knowledge_sources: list[KnowledgeSourceOut] = []
     created_at: datetime
 
 
@@ -154,8 +162,26 @@ def _draft_out(d: MessageDraft) -> DraftOut:
         status=d.status,
         warnings=list(d.warnings or []),
         ai_provider=d.ai_provider,
+        knowledge_sources=_sources(d.knowledge_sources or []),
         created_at=d.created_at,
     )
+
+
+def _sources(raw: list[dict[str, str]]) -> list[KnowledgeSourceOut]:
+    """One entry per document (best score), in citation order."""
+    best: dict[str, KnowledgeSourceOut] = {}
+    for item in raw:
+        try:
+            score = float(item.get("score") or 0)
+            doc = KnowledgeSourceOut(
+                document_id=uuid.UUID(item["document_id"]), title=item["title"], score=score
+            )
+        except (KeyError, ValueError):
+            continue
+        key = str(doc.document_id)
+        if key not in best or score > (best[key].score or 0):
+            best[key] = doc
+    return list(best.values())
 
 
 @router.get("/conversations", response_model=list[SessionOut])
@@ -323,6 +349,32 @@ async def link_conversation(
     return await _session_out(session, comm)
 
 
+class CreateContactIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[str, StringConstraints(max_length=200)] | None = None
+
+
+@router.post(
+    "/conversations/{session_id}/contact",
+    response_model=SessionOut,
+    status_code=status.HTTP_201_CREATED,
+    responses={409: {"model": ErrorResponse}},
+)
+async def create_contact_from_conversation(
+    session_id: uuid.UUID,
+    body: CreateContactIn,
+    request: Request,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_db_session),
+) -> SessionOut:
+    """Create a contact for an unknown sender (explicit user action) and link it."""
+    comm = await service.create_contact_for_session(
+        session, principal, session_id, name=body.name, ip=client_ip(request)
+    )
+    return await _session_out(session, comm)
+
+
 class OpenIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -417,6 +469,26 @@ async def communication_options(
             reason=None if tc else "Teams call copilot is not enabled",
             mock=tc_mock,
             provider=SLUG_OF[Provider.MICROSOFT_TEAMS],
+        )
+    )
+    gm, gm_mock = await enabled(Provider.GOOGLE_MEET, Capability.REAL_TIME_CALL)
+    gm_user = gm_mock or await integrations.user_connected(session, principal, Provider.GOOGLE_MEET)
+    actions.append(
+        ChannelAction(
+            key="google_meet_call",
+            channel="GOOGLE_MEET",
+            capability="REAL_TIME_CALL",
+            label="Google Meet",
+            available=gm and gm_user,
+            reason=None
+            if gm and gm_user
+            else (
+                "Connect your Google account for Meet"
+                if gm
+                else "Google Meet copilot is not enabled"
+            ),
+            mock=gm_mock,
+            provider=SLUG_OF[Provider.GOOGLE_MEET],
         )
     )
     pc, pc_mock = await enabled(Provider.PLIVO, Capability.PHONE_CALL)

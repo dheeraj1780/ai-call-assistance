@@ -16,8 +16,12 @@ BASE: dict[str, Any] = {
 }
 
 
+# Explicit defaults: neither backend/.env nor the test environment (conftest) may supply these.
+UNSET: dict[str, Any] = {"token_encryption_key": None, "telephony_webhook_secret": None}
+
+
 def make(**overrides: Any) -> Settings:
-    return Settings(**{**BASE, **overrides})
+    return Settings(_env_file=None, **{**BASE, **UNSET, **overrides})
 
 
 def test_mock_providers_are_refused_in_production() -> None:
@@ -46,7 +50,12 @@ def test_staging_can_opt_in_to_mocks_but_still_needs_secrets() -> None:
 
 def test_real_provider_requires_its_key() -> None:
     with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
-        Settings(database_url="postgresql://u:p@h/db", jwt_secret=SECRET, ai_provider="anthropic")
+        Settings(
+            _env_file=None,
+            database_url="postgresql://u:p@h/db",
+            jwt_secret=SECRET,
+            ai_provider="anthropic",
+        )
     with pytest.raises(ValueError, match="GOOGLE_CLIENT_ID"):
         Settings(
             database_url="postgresql://u:p@h/db", jwt_secret=SECRET, calendar_provider="google"

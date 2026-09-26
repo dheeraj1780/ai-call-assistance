@@ -61,7 +61,9 @@ from app.integrations.providers.base import (
     ProviderAuthError,
     ProviderError,
     ProviderPermissionError,
+    ProviderRateLimitError,
 )
+from app.integrations.providers.whatsapp import META_ERRORS
 from app.jobs import service as jobs
 from app.tenants.models import Company
 from app.timeline import service as timeline
@@ -600,6 +602,39 @@ async def link_contact(
     return await get_session(session, principal, session_id)
 
 
+async def create_contact_for_session(
+    session: AsyncSession,
+    principal: Principal,
+    session_id: uuid.UUID,
+    *,
+    name: str | None,
+    ip: str | None,
+) -> CommunicationSession:
+    """A human creates a contact for an unknown WhatsApp sender (never done automatically) and
+    links the conversation to it; later messages from that number then match directly."""
+    from app.contacts import service as contacts
+    from app.contacts.models import ContactSource
+    from app.contacts.schemas import ContactCreate
+
+    comm = await get_session(session, principal, session_id)
+    if comm.match_status != MatchStatus.UNMATCHED:
+        raise ConflictError(
+            "Link this conversation to one of the matching contacts instead.",
+            code="conversation_not_unmatched",
+        )
+    wa_id = normalize_phone("+" + (comm.external_participant_id or ""))
+    if Channel(comm.channel) != Channel.WHATSAPP or not wa_id:
+        raise AppError("Only a WhatsApp sender can be turned into a contact.").with_status(422)
+    display = (name or "").strip() or str(comm.metadata_.get("display_name") or "") or f"+{wa_id}"
+    contact = await contacts.create_contact(
+        session,
+        principal,
+        ContactCreate(name=display[:200], phone=f"+{wa_id}", source=ContactSource.OTHER),
+        ip=ip,
+    )
+    return await link_contact(session, principal, session_id, contact.id, ip=ip)
+
+
 async def open_conversation(
     session: AsyncSession, principal: Principal, contact_id: uuid.UUID, channel: Channel
 ) -> CommunicationSession:
@@ -750,16 +785,17 @@ async def send_message(
     except ProviderError as exc:
         error = exc
     if error is not None:
+        provider_code = getattr(error, "provider_code", None)
         msg.status = MessageStatus.FAILED.value
-        msg.error_code = error.code
+        msg.error_code = (f"meta:{provider_code}" if provider_code else error.code)[:64]
         await session.commit()
         if isinstance(error, ProviderAuthError | ProviderPermissionError):
             await integrations.flag_runtime_error(principal.company_id, integration_id, error.code)
         logger.warning(
             "message_send_failed",
-            extra={"session_id": str(comm.id), "error": error.code, "channel": comm.channel},
+            extra={"session_id": str(comm.id), "error": msg.error_code, "channel": comm.channel},
         )
-        raise MessageSendFailedError(details={"message_id": str(msg.id), "error": error.code})
+        raise _send_failed(comm, error, msg)
     msg.status = MessageStatus.SENT.value
     msg.external_message_id = sent.external_message_id
     comm.last_message_at = now
@@ -798,6 +834,31 @@ async def send_message(
     )
     await session.commit()
     return msg
+
+
+def _send_failed(
+    comm: CommunicationSession, error: ProviderError, msg: CommunicationMessage
+) -> AppError:
+    """A clear reason for the salesperson; the message stays FAILED and can be retried."""
+    details = {"message_id": str(msg.id), "error": msg.error_code}
+    whatsapp = Channel(comm.channel) == Channel.WHATSAPP
+    provider_code = getattr(error, "provider_code", None)
+    if isinstance(error, ProviderRateLimitError):
+        return MessageSendFailedError(
+            "The messaging provider's rate limit was reached. Wait a minute and try again.",
+            code="message_rate_limited",
+            details={**details, "retry_after": error.retry_after},
+        ).with_status(429)
+    if isinstance(error, ProviderAuthError):
+        return MessageSendFailedError(
+            "The provider rejected the stored access token (expired or revoked). An admin must "
+            "update it in Settings > Integrations.",
+            details=details,
+        )
+    if whatsapp and provider_code in META_ERRORS:
+        code = "whatsapp_window_closed" if provider_code == "131047" else "message_send_failed"
+        return MessageSendFailedError(META_ERRORS[provider_code], code=code, details=details)
+    return MessageSendFailedError(details=details)
 
 
 async def update_draft(
@@ -839,6 +900,7 @@ def _call_provider_label(provider_name: str | None) -> str:
     return {
         "plivo": Provider.PLIVO.value,
         "teams": Provider.MICROSOFT_TEAMS.value,
+        "google-meet": Provider.GOOGLE_MEET.value,
     }.get(provider_name or "", "MOCK")
 
 
@@ -846,8 +908,10 @@ async def open_call_session(
     session: AsyncSession, call: Call, *, integration_id: uuid.UUID | None
 ) -> CommunicationSession:
     """Every started call also gets a communication session (common model)."""
-    channel = Channel.TEAMS if call.channel == "TEAMS" else Channel.PHONE
-    capability = Capability.REAL_TIME_CALL if channel == Channel.TEAMS else Capability.PHONE_CALL
+    channel = {"TEAMS": Channel.TEAMS, "GOOGLE_MEET": Channel.GOOGLE_MEET}.get(
+        call.channel, Channel.PHONE
+    )
+    capability = Capability.PHONE_CALL if channel == Channel.PHONE else Capability.REAL_TIME_CALL
     comm = await get_or_create_session(
         session,
         call.company_id,

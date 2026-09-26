@@ -106,6 +106,13 @@ export const integrationsApi = {
     apiFetch<{ authorization_url: string }>("/api/v1/integrations/microsoft-teams/connect", {
       method: "POST",
     }),
+  googleMeetConnection: () =>
+    apiFetch<{ connected: boolean; account_email: string | null; status: string | null }>(
+      "/api/v1/integrations/google-meet/connection",
+    ),
+  googleMeetConnect: () =>
+    apiFetch<{ authorization_url: string }>("/api/v1/integrations/google-meet/connect", { method: "POST" }),
+  googleMeetDisconnect: () => apiFetch<void>("/api/v1/integrations/google-meet/connection", { method: "DELETE" }),
   teamsDisconnect: () =>
     apiFetch<void>("/api/v1/integrations/microsoft-teams/connection", { method: "DELETE" }),
   teamsAdminConsentUrl: () =>

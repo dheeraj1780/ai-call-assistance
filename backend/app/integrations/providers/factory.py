@@ -12,6 +12,12 @@ import httpx
 from app.common.config import get_settings
 from app.integrations.domain import IntegrationMode
 from app.integrations.models import Integration
+from app.integrations.providers.google_meet import (
+    GoogleMeetApiClient,
+    GoogleMeetCallingProvider,
+    GoogleMeetOAuthClient,
+    MockGoogleMeetApiClient,
+)
 from app.integrations.providers.plivo import PlivoCredentials, PlivoTelephonyProvider
 from app.integrations.providers.teams import (
     GraphClient,
@@ -51,6 +57,7 @@ def reset_mocks() -> None:
     MockWhatsAppClient.sent = []
     MockWhatsAppClient.fail_next = None
     MockTeamsMessageProvider.sent = []
+    MockGoogleMeetApiClient.connected = []
 
 
 def _require(values: dict[str, str], *keys: str) -> list[str]:
@@ -144,3 +151,30 @@ def integration_uuid(value: str) -> uuid.UUID | None:
         return uuid.UUID(value)
     except ValueError:
         return None
+
+
+# ---- Google Meet ---------------------------------------------------------------------------------
+
+
+def google_meet_oauth_client() -> GoogleMeetOAuthClient:
+    """The platform OAuth client (GOOGLE_MEET_CLIENT_ID / _SECRET); per-user tokens are stored
+    on IntegrationUserConnection."""
+    s = get_settings()
+    if not s.google_meet_client_id or s.google_meet_client_secret is None:
+        raise CredentialsMissingError("GOOGLE_MEET_CLIENT_ID, GOOGLE_MEET_CLIENT_SECRET")
+    return GoogleMeetOAuthClient(
+        s.google_meet_client_id,
+        s.google_meet_client_secret.get_secret_value(),
+        transport=_transport,
+    )
+
+
+def google_meet_api(integration: Integration) -> GoogleMeetApiClient | MockGoogleMeetApiClient:
+    if integration.mode == IntegrationMode.MOCK:
+        return MockGoogleMeetApiClient()
+    return GoogleMeetApiClient(transport=_transport)
+
+
+def google_meet_calling_provider(integration: Integration) -> GoogleMeetCallingProvider:
+    mock = integration.mode == IntegrationMode.MOCK
+    return GoogleMeetCallingProvider(name="google-meet-mock" if mock else "google-meet")

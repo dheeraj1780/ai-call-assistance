@@ -79,7 +79,9 @@ class EndpointingStream:
         if not self.finished:
             self.finished = True
             if self.texts:
-                await self.queue.put(STTResult(" ".join(self.texts), True, 0, 100, 0.9, 50.0))
+                await self.queue.put(
+                    STTResult(" ".join(self.texts), True, 0, 100, 0.9, latency_ms=50.0)
+                )
             await self.queue.put(None)
 
     def pending_audio_ms(self) -> float:
