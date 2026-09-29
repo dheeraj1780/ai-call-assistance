@@ -21,6 +21,10 @@
     <Compile Remove="tests/**" />
     <Content Remove="tests/**" />
     <None Remove="tests/**" />
+    <!-- Separate dev-PC tools (own projects), never part of the gateway build or package. -->
+    <Compile Remove="tools/**" />
+    <Content Remove="tools/**" />
+    <None Remove="tools/**" />
     <InternalsVisibleTo Include="TeamsMediaGateway.Tests" />
   </ItemGroup>
 
@@ -34,6 +38,14 @@
     -->
     <PackageReference Include="Microsoft.Graph.Communications.Calls.Media" Version="1.2.0.17950" />
     <PackageReference Include="Microsoft.Graph.Communications.Calls" Version="1.2.0.17950" />
+    <!--
+      Direct reference (same version Calls.Media 1.2.0.17950 depends on). Its native media libraries
+      (NativeMedia.dll, RtmPal.dll, skypert.dll, ...) are copied only by the package's build/*.targets,
+      and NuGet does not import build/ targets of transitive dependencies: without this line the
+      published gateway has none of them and MediaPlatform.Initialize fails to load 'NativeMedia'.
+      The native libraries also need the Visual C++ x64 runtime on the host (package readme).
+    -->
+    <PackageReference Include="Microsoft.Skype.Bots.Media" Version="1.33.0.258-preview" />
     <PackageReference Include="Microsoft.Identity.Client" Version="4.83.1" />
     <!-- Lets the same executable run as a Windows service (deploy-azure-vm.ps1). A no-op when
          started from a console or tests. -->

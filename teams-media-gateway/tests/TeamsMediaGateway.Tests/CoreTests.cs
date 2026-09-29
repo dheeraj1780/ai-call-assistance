@@ -62,6 +62,73 @@ public class OptionsTests
     }
 }
 
+public class CallDiagnosticsTests
+{
+    [Fact]
+    public void Captures_code_subcode_and_message_when_present()
+    {
+        var (code, subcode, message) = CallDiagnostics.FromResultInfo(new Microsoft.Graph.Models.ResultInfo
+        {
+            Code = 500, Subcode = 1203002, Message = "Server Internal Error. DiagCode: 500#1203002.@",
+        });
+        Assert.Equal(500, code);
+        Assert.Equal(1203002, subcode);
+        Assert.Equal("Server Internal Error. DiagCode: 500#1203002.@", message);
+    }
+
+    [Fact]
+    public void Is_null_safe_when_subcode_message_or_result_are_absent()
+    {
+        Assert.Equal((500, (int?)null, "none"), CallDiagnostics.FromResultInfo(new Microsoft.Graph.Models.ResultInfo { Code = 500 }));
+        Assert.Equal(((int?)null, (int?)null, "none"), CallDiagnostics.FromResultInfo(null));
+        Assert.Equal((200, (int?)0, "none"), CallDiagnostics.FromResultInfo(new Microsoft.Graph.Models.ResultInfo { Code = 200, Subcode = 0, Message = "  " }));
+    }
+
+    [Fact]
+    public void Message_is_single_line_url_free_and_bounded()
+    {
+        var (_, _, message) = CallDiagnostics.FromResultInfo(new Microsoft.Graph.Models.ResultInfo
+        {
+            Code = 403,
+            Message = "Rejected\r\njoin https://teams.microsoft.com/l/meetup-join/19%3Ax%40thread.v2/0?context=%7b%22Tid%22%7d now " + new string('x', 400),
+        });
+        Assert.DoesNotContain("teams.microsoft.com", message);
+        Assert.Contains("Rejected join <url> now", message);
+        Assert.DoesNotContain("\n", message);
+        Assert.True(message.Length <= CallDiagnostics.MaxMessageLength + 3);
+    }
+}
+
+public class ExceptionChainTests
+{
+    [Fact]
+    public void Logs_the_inner_native_load_failure_behind_the_sdk_wrapper()
+    {
+        // Shape reported by Microsoft's samples when NativeMedia.dll or the VC++ runtime is missing.
+        var inner = new DllNotFoundException("Unable to load DLL 'NativeMedia' or one of its dependencies: The specified module could not be found. (0x8007007E)");
+        var outer = new InvalidOperationException("Media platform failed to initialize", inner);
+        var chain = CallCopilot.TeamsMediaGateway.GatewayApp.DescribeExceptionChain(outer);
+        Assert.StartsWith("[0] System.InvalidOperationException (HRESULT 0x", chain);
+        Assert.Contains(" --> [1] System.DllNotFoundException (HRESULT 0x", chain);
+        Assert.Contains("'NativeMedia'", chain);
+    }
+
+    [Fact]
+    public void Redacts_configured_secrets_and_bounds_the_output()
+    {
+        var secret = TestData.Secret;
+        var ex = new AggregateException(
+            new InvalidOperationException($"token for {secret} rejected\r\nsecond line"),
+            new ArgumentException(new string('x', 2000)));
+        var chain = CallCopilot.TeamsMediaGateway.GatewayApp.DescribeExceptionChain(ex, secret, null, "short");
+        Assert.DoesNotContain(secret, chain);
+        Assert.Contains("token for <redacted> rejected second line", chain);
+        Assert.Contains("[1] System.ArgumentException", chain);
+        Assert.DoesNotContain("\n", chain);
+        Assert.True(chain.Length < 1800);
+    }
+}
+
 public class JoinInfoTests
 {
     [Fact]

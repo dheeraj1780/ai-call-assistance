@@ -10,6 +10,7 @@ Status: IMPLEMENTED, tested with a mocked HTTP transport. NOT LIVE VERIFIED unti
 a real GEMINI_API_KEY succeeds.
 """
 
+import asyncio
 import copy
 import logging
 from typing import Any
@@ -32,6 +33,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
 # Headroom for the model's internal reasoning ("thinking" tokens count toward maxOutputTokens).
 THINKING_HEADROOM_TOKENS = 1024
+# Transient errors retried inside one generate() call (the gateway timeout still bounds it).
+RETRY_STATUSES = frozenset({429, 500, 503})
+RETRY_BACKOFF_SECONDS = (1.0, 2.0)
 _REFUSAL_REASONS = {
     "SAFETY",
     "BLOCKED_SAFETY",
@@ -53,7 +57,14 @@ def json_schema_for(schema: type[BaseModel]) -> dict[str, Any]:
             if "$ref" in node:
                 name = str(node["$ref"]).rsplit("/", 1)[-1]
                 return resolve(copy.deepcopy(defs[name]))
-            return {k: resolve(v) for k, v in node.items() if k != "title"}
+            out: dict[str, Any] = {}
+            for k, v in node.items():
+                if k == "properties" and isinstance(v, dict):
+                    # Keys here are FIELD NAMES (a field may be called "title"): keep them all.
+                    out[k] = {name: resolve(sub) for name, sub in v.items()}
+                elif k != "title":  # the schema-level "title" annotation is dropped
+                    out[k] = resolve(v)
+            return out
         if isinstance(node, list):
             return [resolve(v) for v in node]
         return node
@@ -111,11 +122,25 @@ class GeminiProvider:
             async with httpx.AsyncClient(
                 timeout=timeout_seconds, transport=self._transport
             ) as http:
-                resp = await http.post(
-                    url,
-                    json=body,
-                    headers={"x-goog-api-key": self._api_key, "Content-Type": "application/json"},
-                )
+                for attempt in range(1 + len(RETRY_BACKOFF_SECONDS)):
+                    resp = await http.post(
+                        url,
+                        json=body,
+                        headers={
+                            "x-goog-api-key": self._api_key,
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    if resp.status_code not in RETRY_STATUSES or attempt == len(
+                        RETRY_BACKOFF_SECONDS
+                    ):
+                        break
+                    # Google's guidance for 429/500/503: retry with backoff (overload is transient).
+                    logger.info(
+                        "gemini_retry",
+                        extra={"status": resp.status_code, "attempt": attempt + 1, "task": task},
+                    )
+                    await asyncio.sleep(RETRY_BACKOFF_SECONDS[attempt])
         except httpx.TimeoutException as exc:
             raise AITimeoutError("gemini request timed out") from exc
         except httpx.HTTPError as exc:

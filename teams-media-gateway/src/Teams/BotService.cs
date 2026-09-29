@@ -118,6 +118,7 @@ public sealed class CallHandler
     private readonly JoinRequest request;
     private readonly CallSession session;
     private readonly Action onEnded;
+    private readonly ILogger logger;
     private readonly ConcurrentDictionary<uint, string> trackBySource = new();
 
     public CallHandler(ICall call, ILocalMediaSession media, JoinRequest request, ICallEventSink events,
@@ -127,7 +128,7 @@ public sealed class CallHandler
         this.media = media;
         this.request = request;
         this.onEnded = onEnded;
-        var logger = loggerFactory.CreateLogger<CallHandler>();
+        logger = loggerFactory.CreateLogger<CallHandler>();
         session = new CallSession(request, call.Id, events,
             ct => call.UpdateRecordingStatusAsync(RecordingStatus.Recording, ct),
             () => new AudioPipeline(new WebSocketMediaSink(new Uri(request.MediaWsUrl)), options.AudioQueueFrames, logger,
@@ -148,6 +149,13 @@ public sealed class CallHandler
         else if (state == CallState.Terminated)
         {
             var failed = args.NewResource.ResultInfo?.Code is >= 400;
+            // Teams' own termination reason (code + subcode + message) - the code alone cannot be
+            // attributed. Only these diagnostic fields are logged (no tokens, URLs or content).
+            var (code, subcode, message) = CallDiagnostics.FromResultInfo(args.NewResource.ResultInfo);
+            logger.Log(failed ? Microsoft.Extensions.Logging.LogLevel.Warning : Microsoft.Extensions.Logging.LogLevel.Information,
+                "teams_call_terminated call_id={CallId} gateway_call_id={GatewayCallId} result_code={ResultCode} result_subcode={ResultSubcode} result_message={ResultMessage}",
+                request.CallId, call.Id, code?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none",
+                subcode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none", message);
             _ = Task.Run(() => EndAsync(failed, failed ? $"teams_{args.NewResource.ResultInfo?.Code}" : null));
         }
     }

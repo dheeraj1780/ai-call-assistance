@@ -76,6 +76,53 @@ function Info([string]$m) { Write-Host "   $m" }
 function Warn([string]$m) { Write-Host "   WARNING: $m"; $script:Notes.Add($m) }
 function Plan([string]$m) { Write-Host "   [dry-run] would $m" }
 
+# ---- native media libraries (fail closed) ----
+# Microsoft.Skype.Bots.Media ships these through its build/*.targets (TeamsMediaGateway.csproj must
+# reference the package directly). Without them MediaPlatform.Initialize fails ("Unable to load DLL
+# 'NativeMedia'"). They must sit next to the executable, once, and be x64 (they additionally need the
+# Visual C++ x64 runtime on the VM, which is not checked here).
+$RequiredNativeMedia = @("NativeMedia.dll", "RtmPal.dll", "RtmCodecs.dll", "skypert.dll", "SlimCV.dll", "RtmMvrCs.dll", "Ijwhost.dll", "MediaPerf.dll")
+function Get-PeMachine([byte[]]$Head) {
+    # IMAGE_FILE_HEADER.Machine: 0x8664 = x64, 0x014C = x86, 0xAA64 = ARM64
+    if ($Head.Length -lt 0x40 -or $Head[0] -ne 0x4D -or $Head[1] -ne 0x5A) { return "not-PE" }
+    $pe = [BitConverter]::ToInt32($Head, 0x3C)
+    if ($pe -lt 0 -or $pe + 6 -gt $Head.Length -or [Text.Encoding]::ASCII.GetString($Head, $pe, 4) -ne "PE`0`0") { return "not-PE" }
+    switch ([BitConverter]::ToUInt16($Head, $pe + 4)) { 0x8664 { "x64" } 0x014C { "x86" } 0xAA64 { "arm64" } default { "other" } }
+}
+function Assert-NativeMedia([string]$What, [string[]]$Names, [scriptblock]$ReadHead) {
+    # $Names: every file path in the artifact (relative, '/' or '\'); $ReadHead: name -> first 4 KB.
+    $problems = @()
+    foreach ($n in $RequiredNativeMedia) {
+        $all = @($Names | Where-Object { (Split-Path $_ -Leaf) -ieq $n })
+        $root = @($all | Where-Object { $_ -ieq $n })
+        if (-not $root) { $problems += "$n missing next to TeamsMediaGateway.exe"; continue }
+        if ($all.Count -gt 1) { $problems += "$n present $($all.Count) times ($($all -join ', '))" }
+        $arch = Get-PeMachine (& $ReadHead $root[0])
+        if ($arch -ne "x64") { $problems += "$n is $arch, expected x64" }
+    }
+    if ($problems) {
+        throw "Native media libraries check FAILED for ${What}: $($problems -join '; '). Microsoft.Skype.Bots.Media must be a direct PackageReference of TeamsMediaGateway.csproj; do not deploy this build."
+    }
+    Info "native media libraries OK in ${What}: $($RequiredNativeMedia -join ', ') (x64, one copy each)"
+}
+function Assert-NativeMediaDir([string]$Dir, [string]$What) {
+    $names = @(Get-ChildItem $Dir -Recurse -File | ForEach-Object { $_.FullName.Substring($Dir.TrimEnd('\').Length + 1) })
+    Assert-NativeMedia $What $names {
+        param($n) $fs = [IO.File]::OpenRead((Join-Path $Dir $n)); try { $b = New-Object byte[] 4096; $r = $fs.Read($b, 0, 4096); , $b[0..($r - 1)] } finally { $fs.Dispose() }
+    }.GetNewClosure()
+}
+function Assert-NativeMediaZip([string]$Zip) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($Zip)
+    try {
+        $entries = @($archive.Entries | Where-Object { $_.Name })
+        Assert-NativeMedia "package $Zip" @($entries | ForEach-Object { $_.FullName }) {
+            param($n) $e = $entries | Where-Object { $_.FullName -ieq $n } | Select-Object -First 1
+            $s = $e.Open(); try { $b = New-Object byte[] 4096; $r = $s.Read($b, 0, 4096); , $b[0..($r - 1)] } finally { $s.Dispose() }
+        }.GetNewClosure()
+    } finally { $archive.Dispose() }
+}
+
 # ======================================================================================
 # -Package (dev PC)
 # ======================================================================================
@@ -89,6 +136,7 @@ if ($Package) {
     Step "Publishing (Release, win-x64, framework-dependent)"
     & $dotnetExe publish (Join-Path $src "TeamsMediaGateway.csproj") -c Release -r win-x64 --self-contained false -o $work -nologo
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }
+    try { Assert-NativeMediaDir $work "publish output $work" } catch { Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue; throw }
     $commit = ""; $dirty = $false
     try {
         $commit = (& git -C $src rev-parse HEAD 2>$null)
@@ -104,6 +152,8 @@ if ($Package) {
     if (Test-Path $OutputZip) { Remove-Item $OutputZip -Force }
     Compress-Archive -Path (Join-Path $work "*") -DestinationPath $OutputZip
     Remove-Item $work -Recurse -Force
+    # Validate the final artifact itself; an incomplete zip is deleted, never left for upload.
+    try { Assert-NativeMediaZip $OutputZip } catch { Remove-Item $OutputZip -Force -ErrorAction SilentlyContinue; throw }
     Step "Package ready"
     Info "zip:    $OutputZip ($([math]::Round((Get-Item $OutputZip).Length / 1MB, 1)) MB)"
     Info "commit: $commit$(if ($dirty) { ' (+ uncommitted changes)' })"
@@ -267,7 +317,11 @@ $cfg.PublicPort = [int](Pick $(if ($InstancePublicPort) { "$InstancePublicPort" 
 $cfg.MediaPort = [int](Pick $(if ($InstanceInternalPort) { "$InstanceInternalPort" } else { "" }) "Gateway__InstanceInternalPort" "8445")
 $cfg.MaxCalls = Pick $(if ($MaxConcurrentCalls) { "$MaxConcurrentCalls" } else { "" }) "Gateway__MaxConcurrentCalls" ""
 $cfg.LocalHttpPort = $LocalHttpPort
-$cfg.HttpsEnabled = $existing.Contains("Kestrel__Endpoints__Https__Url")
+# Listener settings are CCGW_-prefixed (GatewayApp.EnvironmentPrefix): the Teams media SDK's internal
+# ASP.NET host reads every unprefixed variable, so unprefixed Kestrel__* would make it bind our
+# endpoints too (media init: "Failed to bind to address https://[::]:443"). The legacy name is only
+# recognised here so a re-run on an older deployment knows HTTPS was on; it is never written again.
+$cfg.HttpsEnabled = $existing.Contains("CCGW_Kestrel__Endpoints__Https__Url") -or $existing.Contains("Kestrel__Endpoints__Https__Url")
 $cfg.HttpsPort = $null
 if ($cfg.Callback) {
     $u = $null
@@ -353,7 +407,10 @@ Step "4. Gateway package"
 $appDir = Join-Path $InstallRoot "app"
 $staged = $null
 if (-not $PackageUrl -and -not $PackagePath) {
-    if (Test-Path (Join-Path $appDir $ExeName)) { Info "no package given: keeping the deployed build" }
+    if (Test-Path (Join-Path $appDir $ExeName)) {
+        Info "no package given: keeping the deployed build"
+        if (-not (Test-Path (Join-Path $appDir "NativeMedia.dll"))) { Warn "the deployed build has no NativeMedia.dll: the media platform cannot start until a package built with the Microsoft.Skype.Bots.Media reference is deployed" }
+    }
     else { throw "no gateway deployed yet: pass -PackageUrl or -PackagePath" }
 } else {
     $zip = $PackagePath
@@ -390,6 +447,8 @@ if (-not $PackageUrl -and -not $PackagePath) {
         $di = Join-Path $staged "deploy-info.json"
         if (Test-Path $di) { Info "package commit: $((Get-Content $di -Raw | ConvertFrom-Json).commit)" }
         if (-not (Test-Path (Join-Path $staged "Microsoft.Skype.Bots.Media.dll"))) { Warn "Microsoft.Skype.Bots.Media.dll not in package: is it the win-x64 publish output?" }
+        # Fail closed before the service is stopped or any configuration/firewall/service change.
+        Assert-NativeMediaDir $staged "the staged package ($(if ($PackageUrl) { 'downloaded from -PackageUrl' } else { $PackagePath }))"
     }
 }
 
@@ -437,7 +496,7 @@ $envMap = [ordered]@{
     "DOTNET_ROOT"                                       = $DotnetDir
     "Logging__EventLog__LogLevel__Default"              = "Information"
     # loopback-only listener for health checks on the VM (never exposed; no firewall rule)
-    "Kestrel__Endpoints__Loopback__Url"                 = "http://127.0.0.1:$LocalHttpPort"
+    "CCGW_Kestrel__Endpoints__Loopback__Url"            = "http://127.0.0.1:$LocalHttpPort"
     "Gateway__BackendSharedSecret"                      = $cfg.Secret
     "Gateway__AppId"                                    = $cfg.AppId
     "Gateway__AppSecret"                                = $cfg.AppSecret
@@ -452,11 +511,11 @@ $envMap = [ordered]@{
 if ($cfg.MaxCalls) { $envMap["Gateway__MaxConcurrentCalls"] = $cfg.MaxCalls }
 if ($httpsOn) {
     # Kestrel selects the store certificate by subject; the thumbprint check above pins which one.
-    $envMap["Kestrel__Endpoints__Https__Url"] = "https://*:$($cfg.HttpsPort)"
-    $envMap["Kestrel__Endpoints__Https__Certificate__Subject"] = $cfg.Dns
-    $envMap["Kestrel__Endpoints__Https__Certificate__Store"] = "My"
-    $envMap["Kestrel__Endpoints__Https__Certificate__Location"] = "LocalMachine"
-    $envMap["Kestrel__Endpoints__Https__Certificate__AllowInvalid"] = "false"
+    $envMap["CCGW_Kestrel__Endpoints__Https__Url"] = "https://*:$($cfg.HttpsPort)"
+    $envMap["CCGW_Kestrel__Endpoints__Https__Certificate__Subject"] = $cfg.Dns
+    $envMap["CCGW_Kestrel__Endpoints__Https__Certificate__Store"] = "My"
+    $envMap["CCGW_Kestrel__Endpoints__Https__Certificate__Location"] = "LocalMachine"
+    $envMap["CCGW_Kestrel__Endpoints__Https__Certificate__AllowInvalid"] = "false"
     Info "HTTPS on port $($cfg.HttpsPort) (from CallbackBaseUrl) for $($cfg.Dns)"
 } else { Info "HTTPS not configured yet" }
 $cfg.HttpsEnabled = $httpsOn
@@ -503,8 +562,20 @@ $binPath = "`"$(Join-Path $appDir $ExeName)`""
 $svc = Get-Service $ServiceName -ErrorAction SilentlyContinue
 if ($svc -and $svc.Status -ne "Stopped") {
     Info "stopping service (active calls are left gracefully)"
+    $oldPid = (Get-CimInstance Win32_Service -Filter "Name='$ServiceName'").ProcessId
     Stop-Service $ServiceName -Force
     (Get-Service $ServiceName).WaitForStatus("Stopped", [TimeSpan]::FromSeconds(60))
+    # "Stopped" is reported before the process has released its sockets (seen: ~30 s). Starting earlier
+    # makes the media platform fail with "Failed to bind to address https://[::]:8445: address already in use".
+    $ports = @($cfg.MediaPort, $cfg.HttpsPort) | Where-Object { $_ }
+    $waitStart = Get-Date
+    while ((($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) -or
+            (Get-NetTCPConnection -LocalPort $ports -ErrorAction SilentlyContinue | Where-Object { $_.State -ne "TimeWait" })) -and
+           ((Get-Date) - $waitStart).TotalSeconds -lt 180) { Start-Sleep -Milliseconds 500 }
+    $stillRunning = $oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)
+    $portsBusy = @(Get-NetTCPConnection -LocalPort $ports -ErrorAction SilentlyContinue | Where-Object { $_.State -ne "TimeWait" })
+    if ($stillRunning -or $portsBusy) { throw "old gateway process (pid $oldPid) still running or ports $($ports -join '/') still in use after 180 s; not starting the new build" }
+    Info "old process exited and ports $($ports -join '/') are free (waited $([int]((Get-Date) - $waitStart).TotalSeconds) s)"
 }
 if ($staged) {
     if (Test-Path (Join-Path $appDir $ExeName)) {

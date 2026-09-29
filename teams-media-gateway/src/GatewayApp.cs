@@ -8,6 +8,18 @@ namespace CallCopilot.TeamsMediaGateway;
 /// CallCopilot API; this service only bridges Teams media to it.</summary>
 public static class GatewayApp
 {
+    /// <summary>Prefix of the environment variables only this host reads
+    /// ("CCGW_Kestrel__Endpoints__Https__Url" -> "Kestrel:Endpoints:Https:Url"). The Teams media SDK
+    /// starts its own default-configured ASP.NET host in this process, which reads every UNPREFIXED
+    /// variable: an unprefixed Kestrel__Endpoints__* makes it bind our endpoints too and media
+    /// initialization fails ("Failed to bind to address https://[::]:443: address already in use").
+    /// Listener settings therefore come only through this namespace (deploy-azure-vm.ps1).</summary>
+    public const string EnvironmentPrefix = "CCGW_";
+
+    /// <summary>Adds the gateway-only environment namespace (see <see cref="EnvironmentPrefix"/>).</summary>
+    public static IConfigurationBuilder AddGatewayEnvironment(IConfigurationBuilder configuration) =>
+        configuration.AddEnvironmentVariables(EnvironmentPrefix);
+
     public static WebApplication Build(string[] args, Action<WebApplicationBuilder>? configure = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -19,6 +31,9 @@ public static class GatewayApp
                 ? AppContext.BaseDirectory
                 : null,
         });
+        // Listener (Kestrel) settings come from CCGW_-prefixed variables, which the media SDK's
+        // internal host does not read. Added before anything reads configuration.
+        AddGatewayEnvironment(builder.Configuration);
         // Reports start/stop to the Windows Service Control Manager when run as a service
         // (graceful stop: active calls are left). No effect otherwise.
         builder.Host.UseWindowsService(o => o.ServiceName = "CallCopilotTeamsMediaGateway");
@@ -59,8 +74,40 @@ public static class GatewayApp
             // Report the failure honestly (e.g. certificate not found, unsupported OS image).
             var reason = $"Media platform failed to start: {ex.GetType().Name}: {ex.Message}";
             logger.LogError("teams_media_unavailable reasons={Reasons}", reason);
+            // The SDK wraps the real cause (e.g. DllNotFoundException 'NativeMedia' 0x8007007E) in a
+            // ServiceException: log the whole chain. Types, HRESULTs and messages only; configured
+            // secrets are redacted in case a message ever echoes one.
+            logger.LogError("teams_media_platform_init_failed chain={Chain}",
+                DescribeExceptionChain(ex, options.AppSecret, options.BackendSharedSecret));
             return new UnavailableMediaBot([reason]);
         }
+    }
+
+    /// <summary>"[0] Type (HRESULT 0x...): message --> [1] ..." for an exception and its inner
+    /// exceptions (all children of an AggregateException), bounded in depth and length. No stack
+    /// traces or data; any non-trivial <paramref name="secrets"/> value is replaced by "&lt;redacted&gt;".</summary>
+    internal static string DescribeExceptionChain(Exception exception, params string?[] secrets)
+    {
+        const int MaxDepth = 8, MaxMessage = 500;
+        var redact = secrets.Where(s => !string.IsNullOrEmpty(s) && s.Length >= 8).Select(s => s!).ToArray();
+        var parts = new List<string>();
+        var seen = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
+
+        void Walk(Exception e, int depth)
+        {
+            if (depth > MaxDepth || !seen.Add(e)) return;
+            var message = (e.Message ?? "").ReplaceLineEndings(" ");
+            foreach (var s in redact) message = message.Replace(s, "<redacted>", StringComparison.Ordinal);
+            if (message.Length > MaxMessage) message = message[..MaxMessage] + "...";
+            parts.Add($"[{depth}] {e.GetType().FullName} (HRESULT 0x{e.HResult:X8}): {message}");
+            if (e is AggregateException aggregate)
+                foreach (var inner in aggregate.InnerExceptions) Walk(inner, depth + 1);
+            else if (e.InnerException is not null)
+                Walk(e.InnerException, depth + 1);
+        }
+
+        Walk(exception, 0);
+        return string.Join(" --> ", parts);
     }
 
     private static async Task<byte[]?> VerifiedBody(HttpRequest req, GatewayOptions options)

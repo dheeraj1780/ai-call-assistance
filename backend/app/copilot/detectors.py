@@ -19,6 +19,9 @@ class Detection:
     confidence: float
     category: ObjectionCategory | None = None
     key: str = ""  # dedupe key suffix
+    # Conversation-state bucket when it differs from the kind's default (see copilot/state.py):
+    # "fact" (e.g. scale), "commitment", "decision".
+    bucket: str = ""
 
 
 def _rx(*patterns: str) -> re.Pattern[str]:
@@ -96,7 +99,9 @@ NUMBER_WORDS = {
         "fifteen sixteen seventeen eighteen nineteen twenty".split()
     )
 } | {"thirty": 30, "forty": 40, "fifty": 50, "hundred": 100}
-_NUMBER = r"\d{1,6}|" + "|".join(sorted(NUMBER_WORDS, key=len, reverse=True))
+_NUMBER = r"\d{1,3}(?:,\d{2,3})+|\d{1,6}|" + "|".join(
+    sorted(NUMBER_WORDS, key=len, reverse=True)
+)
 SCALE = re.compile(
     rf"\b(?P<n>{_NUMBER})\s+(?P<unit>branches|locations|stores|shops|outlets|warehouses|godowns"
     r"|factories|users|employees|staff|salespeople|orders|invoices|skus|products|trucks)\b",
@@ -147,6 +152,31 @@ NEXT_STEP = re.compile(
     r"(?:quote|quotation|pricing|price list|proposal|brochure|details|demo link)"
     r"|(?:let's|let us|can we) (?:schedule|set up|book|have) (?:a )?(?:demo|meeting|call|visit)"
     r"|call (?:me|us) (?:back|again) (?:on|next|tomorrow))\b",
+    re.IGNORECASE,
+)
+# A person/role on the customer's side who is involved (not necessarily the decision maker).
+STAKEHOLDER = re.compile(
+    r"\b(?:our|my|the|their)\s+(?P<role>(?:operations|ops|finance|purchase|procurement|it|sales"
+    r"|accounts|warehouse|production|plant|marketing|hr|store)\s+(?:head|director|manager|lead)"
+    r"|cfo|ceo|coo|cto|md|managing director|owner|founder|partner|director)\b",
+    re.IGNORECASE,
+)
+# Someone commits to a concrete action ("let's schedule a demo next week", "I'll send the
+# proposal"). The salesperson's commitments count too.
+COMMITMENT = re.compile(
+    r"\b(?:(?:i|we)(?:'ll| will| shall)|let's|let us)\s+(?:schedule|set up|book|send|share"
+    r"|arrange|organise|organize|plan|do|have|fix)\b[^.?!]{3,140}",
+    re.IGNORECASE,
+)
+DECISION = re.compile(
+    r"\b(?:(?:we|i)(?:'ve| have)? decided|we(?:'ll| will) go (?:ahead )?with|agreed (?:to|on)"
+    r"|(?:it's|that's|that is) (?:agreed|confirmed|final))\b",
+    re.IGNORECASE,
+)
+TIMING = re.compile(
+    r"\b(?:today|tomorrow|this week|next week|next month|(?:on|by|this|next) "
+    r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|within \w+ (?:days|weeks)"
+    r"|in (?:\w+ )?(?:days|weeks))\b",
     re.IGNORECASE,
 )
 QUESTION_START = re.compile(
@@ -212,6 +242,7 @@ def detect(text: str, *, speaker_is_customer: bool) -> list[Detection]:
                     f"{_number(m.group('n'))} {unit}",
                     0.7,
                     key=f"scale:{unit}",
+                    bucket="fact",
                 )
             )
         m = NEED.search(text)
@@ -231,10 +262,39 @@ def detect(text: str, *, speaker_is_customer: bool) -> list[Detection]:
             found.append(Detection(NoteKind.TIMELINE, _cap(m.group(0)), 0.55, key=_key(m.group(0))))
         if DECISION_MAKER.search(text):
             found.append(Detection(NoteKind.DECISION_MAKER, _clip(text), 0.65, key=_key(text)))
-    m = NEXT_STEP.search(text)
-    if m:
-        found.append(Detection(NoteKind.NEXT_STEP, _clip(text), 0.6, key=m.group(0).lower()))
+        if not is_question(text):
+            for m in STAKEHOLDER.finditer(text):
+                role = " ".join(w.upper() if len(w) <= 3 else w.capitalize()
+                                for w in m.group("role").split())
+                found.append(
+                    Detection(NoteKind.STAKEHOLDER, role, 0.65, key=f"role:{role.lower()}")
+                )
+    commitment = None if is_question(text) else COMMITMENT.search(text)
+    if commitment:
+        clause = _clause(text, COMMITMENT)
+        found.append(
+            Detection(
+                NoteKind.NEXT_STEP, _clip(clause), 0.65, key=_key(clause), bucket="commitment"
+            )
+        )
+    else:
+        m = NEXT_STEP.search(text)
+        if m:
+            found.append(Detection(NoteKind.NEXT_STEP, _clip(text), 0.6, key=m.group(0).lower()))
+    if DECISION.search(text) and not is_question(text):
+        clause = _clause(text, DECISION)
+        found.append(
+            Detection(
+                NoteKind.IMPORTANT_FACT, _clip(clause), 0.6, key=_key(clause), bucket="decision"
+            )
+        )
     return found
+
+
+def timing_of(text: str) -> str | None:
+    """An explicitly stated time ("next week", "on Friday") - never guessed."""
+    m = TIMING.search(text)
+    return m.group(0) if m else None
 
 
 # ---- Agenda topic matching -------------------------------------------------------------------

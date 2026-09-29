@@ -24,6 +24,13 @@ from app.conversations.assist import MessageAssist
 KEY = "AIza-TEST-KEY-never-logged"
 
 
+@pytest.fixture(autouse=True)
+def no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ai import gemini_provider
+
+    monkeypatch.setattr(gemini_provider, "RETRY_BACKOFF_SECONDS", (0.0, 0.0))
+
+
 def answer(payload: dict[str, Any] | str, *, finish: str = "STOP", **extra: Any) -> httpx.Response:
     text = payload if isinstance(payload, str) else json.dumps(payload)
     return httpx.Response(
@@ -194,3 +201,74 @@ def test_default_configuration_stays_mock() -> None:
 def test_gemini_requires_a_key() -> None:
     with pytest.raises(ValueError, match="GEMINI_API_KEY"):
         Settings(_env_file=None, ai_message_assist_provider="gemini")
+
+
+def _required_are_defined(node: Any, path: str = "$") -> list[str]:
+    """Every name in "required" must exist in "properties" (Gemini rejects the schema otherwise)."""
+    problems: list[str] = []
+    if isinstance(node, dict):
+        props = node.get("properties")
+        for name in node.get("required", []):
+            if not isinstance(props, dict) or name not in props:
+                problems.append(f"{path}: required '{name}' is not a property")
+        for key, value in node.items():
+            problems += _required_are_defined(value, f"{path}.{key}")
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            problems += _required_are_defined(value, f"{path}[{i}]")
+    return problems
+
+
+def test_fields_named_title_survive_schema_cleanup() -> None:
+    """Regression: Google returned 400 INVALID_ARGUMENT "schema at properties.actions.items
+    requires unspecified property 'title'" because title annotations AND a field named "title"
+    were both removed."""
+    schema = json_schema_for(MessageAssist)
+    action = schema["properties"]["actions"]["items"]
+    assert "title" in action["properties"]
+    assert action["required"] == ["title"]
+    assert "title" not in schema  # the annotation is still dropped
+    assert "title" not in action
+    assert _required_are_defined(schema) == []
+
+
+@pytest.mark.parametrize("model", ["KnowledgeAnswer", "PostCallAnalysis", "CopilotDelta"])
+def test_every_ai_schema_is_self_consistent(model: str) -> None:
+    import importlib
+
+    module = {
+        "KnowledgeAnswer": "app.knowledge.service",
+        "PostCallAnalysis": "app.postcall.service",
+        "CopilotDelta": "app.copilot.engine",
+    }[model]
+    assert (
+        _required_are_defined(json_schema_for(getattr(importlib.import_module(module), model)))
+        == []
+    )
+
+
+async def test_transient_503_is_retried_and_recovers() -> None:
+    """Google returned 503 UNAVAILABLE for gemini-3.8-flash under load; a retry succeeds."""
+    responses = iter(
+        [httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}}), answer(REPLY)]
+    )
+    p, seen = provider(lambda r: next(responses))
+    result = await generate(p)
+    assert result.output.reply.startswith("Thank you")
+    assert len(seen) == 2
+
+
+async def test_gives_up_after_bounded_retries() -> None:
+    p, seen = provider(lambda r: httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}}))
+    with pytest.raises(AIUnavailableError):
+        await generate(p)
+    assert len(seen) == 3  # 1 + 2 retries, never unbounded
+
+
+async def test_request_errors_are_not_retried() -> None:
+    p, seen = provider(
+        lambda r: httpx.Response(400, json={"error": {"status": "INVALID_ARGUMENT"}})
+    )
+    with pytest.raises(AIUnavailableError):
+        await generate(p)
+    assert len(seen) == 1
