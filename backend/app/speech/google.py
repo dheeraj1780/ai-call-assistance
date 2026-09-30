@@ -31,6 +31,7 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from typing import Any, Protocol
 
 from app.common.config import Settings
+from app.speech.g711 import MulawTo16kPcm
 from app.speech.provider import (
     SUPPORTED_LANGUAGES,
     STTAuthError,
@@ -137,6 +138,13 @@ class GoogleSTTStream:
         self._client = client
         self._settings = settings
         self.language = language
+        # Telephony mu-law (8 kHz) is decoded to PCM16 16 kHz BEFORE recognition, so the same
+        # decoding config (LINEAR16) is used whatever the provider. Teams/Meet audio is already
+        # PCM16 16 kHz and passes through untouched.
+        self._normalizer = MulawTo16kPcm() if encoding == "mulaw" else None
+        self.input_encoding = encoding
+        if self._normalizer is not None:
+            encoding, sample_rate = "linear16", sample_rate * 2
         self.sample_rate = sample_rate
         self.encoding = encoding
         bytes_per_sample = 2 if encoding == "linear16" else 1
@@ -178,8 +186,9 @@ class GoogleSTTStream:
                 "provider": "google",
                 "model": settings.google_stt_model,
                 "language": language,
-                "encoding": encoding,
-                "sample_rate": sample_rate,
+                "encoding": self.encoding,
+                "input_encoding": self.input_encoding,
+                "sample_rate": self.sample_rate,
             },
         )
 
@@ -192,6 +201,8 @@ class GoogleSTTStream:
             # The background stream failed for good; surface it to the caller (LiveSession
             # contains it and may reopen a new stream later).
             raise STTUnavailableError("stt stream is not running")
+        if self._normalizer is not None:
+            audio = self._normalizer.process(audio)
         self._pending.extend(audio)
         while len(self._pending) >= self._chunk_bytes:
             size = min(self._chunk_bytes, MAX_REQUEST_BYTES)

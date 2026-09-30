@@ -62,8 +62,12 @@ export function useLiveCall(callId: string) {
       socket.onmessage = (event) => {
         const msg = JSON.parse(String(event.data)) as LiveMessage;
         if (msg.type === "hello") {
+          // After a reconnect the server is authoritative: events may have been missed (and the
+          // call may have ended while this screen was offline), so rebuild from the snapshot.
+          const reconnected = retryRef.current > 0;
           retryRef.current = 0;
           setConnection("live");
+          if (reconnected) void loadSnapshot();
           return;
         }
         if (msg.type === "pong") return;

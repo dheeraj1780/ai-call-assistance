@@ -112,6 +112,7 @@ export type CallStatus =
   | "RINGING"
   | "CONNECTED"
   | "ACTIVE"
+  | "ENDING"
   | "COMPLETED"
   | "NO_ANSWER"
   | "CANCELLED"
@@ -148,9 +149,36 @@ export interface Call {
   meeting_url?: string | null;
   transcript_persistence?: "PERSISTED" | "TRANSIENT" | "PENDING_RECORDING_STATUS";
   language?: string | null;
+  telephony_error?: string | null;
+  end_requested_at?: string | null;
   created_at: string;
   updated_at: string;
 }
+
+/** Fields that can be edited while a call is still PLANNED (the target is re-validated). */
+export interface CallPlanEdit {
+  objective?: string | null;
+  desired_outcome?: string | null;
+  scheduled_at?: string | null;
+  meeting_url?: string | null;
+  language?: "en-IN" | "en-US" | "hi-IN" | "de-DE";
+  user_id?: string | null;
+}
+
+export const LANGUAGES = [
+  { value: "en-IN", label: "English (India)" },
+  { value: "en-US", label: "English (US)" },
+  { value: "hi-IN", label: "Hindi (India)" },
+  { value: "de-DE", label: "German" },
+] as const;
+
+export type ChannelKey = "PHONE" | "TEAMS" | "GOOGLE_MEET";
+
+export const CHANNEL_NAME: Record<ChannelKey, string> = {
+  PHONE: "Phone call",
+  TEAMS: "Microsoft Teams",
+  GOOGLE_MEET: "Google Meet",
+};
 
 export type ActionItemKind = "TASK" | "FOLLOW_UP" | "APPOINTMENT";
 export type ActionItemStatus = "OPEN" | "IN_PROGRESS" | "DONE" | "CANCELLED";
@@ -224,8 +252,11 @@ export const crm = {
     meeting_url?: string;
     language?: "en-IN" | "en-US" | "hi-IN" | "de-DE";
   }) => apiFetch<Call>("/api/v1/calls", { method: "POST", body }),
-  updateCall: (id: string, body: Partial<Call>) =>
+  updateCall: (id: string, body: Partial<Call> | CallPlanEdit) =>
     apiFetch<Call>(`/api/v1/calls/${id}`, { method: "PATCH", body }),
+  /** Make a call that never connected (failed / cancelled / no answer) PLANNED again. */
+  reopenCall: (id: string) => apiFetch<Call>(`/api/v1/calls/${id}/reopen`, { method: "POST" }),
+  endCall: (id: string) => apiFetch<Call>(`/api/v1/calls/${id}/end`, { method: "POST" }),
 
   listActionItems: (params: Query) =>
     apiFetch<Page<ActionItem>>(`/api/v1/action-items${qs(params)}`),
@@ -277,4 +308,32 @@ export function localInputToIso(value: string): string | undefined {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return undefined;
   return d.toISOString();
+}
+
+/** Calls that are in progress (including "ending"): they have a live screen. */
+export const LIVE_CALL_STATUSES: ReadonlySet<CallStatus> = new Set([
+  "INITIATED",
+  "RINGING",
+  "CONNECTED",
+  "ACTIVE",
+  "ENDING",
+]);
+/** A call that ended without ever connecting can be corrected and started again. */
+export function canReopen(call: Pick<Call, "status" | "started_at">): boolean {
+  return ["FAILED", "CANCELLED", "NO_ANSWER"].includes(call.status) && !call.started_at;
+}
+
+const START_FAILURES: Record<string, string> = {
+  telephony_unavailable: "The calling provider could not start the call.",
+  start_interrupted: "The call was interrupted while starting (the server restarted or lost contact).",
+  connect_timeout: "The call did not connect in time.",
+  inactivity_timeout: "The call was ended automatically: no audio or activity for a long time.",
+  max_duration: "The call was ended automatically after reaching the maximum duration.",
+  teams_provider_request_failed:
+    "Teams could not join this meeting. Check that the link is the full 'Join the meeting now' link.",
+};
+/** Human explanation of a call's `telephony_error` code. */
+export function explainCallError(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return START_FAILURES[code] ?? `The provider reported: ${label(code)}.`;
 }

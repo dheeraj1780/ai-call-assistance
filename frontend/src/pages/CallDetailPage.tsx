@@ -7,7 +7,19 @@ import { PostCallPanel } from "../components/PostCallPanel";
 import { ScheduleEventForm } from "../components/ScheduleEventForm";
 import { Badge, Card, QueryState, SelectField, TextArea } from "../components/common";
 import { Alert, Button } from "../components/ui";
-import { CALL_OUTCOMES, crm, formatDateTime, formatDuration, label, type Call, type CallStatus } from "../lib/crm";
+import {
+  CALL_OUTCOMES,
+  LIVE_CALL_STATUSES,
+  canReopen,
+  crm,
+  explainCallError,
+  formatDateTime,
+  formatDuration,
+  label,
+  type Call,
+  type CallStatus,
+} from "../lib/crm";
+import { liveApi, type Segment } from "../lib/live";
 import { errorMessage } from "../lib/errors";
 import { memberName, useMembers } from "../lib/members";
 
@@ -33,6 +45,20 @@ export function CallDetailPage() {
   const items = useQuery({
     queryKey: ["action-items", { callId: id }],
     queryFn: () => crm.listActionItems({ call_id: id, limit: 100 }),
+  });
+  const end = useMutation({
+    mutationFn: () => crm.endCall(id),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["call", id], updated);
+      queryClient.invalidateQueries({ queryKey: ["calls"] });
+    },
+  });
+  const reopen = useMutation({
+    mutationFn: () => crm.reopenCall(id),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["call", id], updated);
+      queryClient.invalidateQueries({ queryKey: ["calls"] });
+    },
   });
   const update = useMutation({
     mutationFn: (body: Partial<Call>) => crm.updateCall(id, body),
@@ -63,23 +89,39 @@ export function CallDetailPage() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              {["INITIATED", "RINGING", "CONNECTED", "ACTIVE"].includes(call.data.status) ? (
-                <Link
-                  to={`/calls/${id}/live`}
-                  className="inline-flex items-center rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white"
-                >
-                  Open live call
-                </Link>
+              {LIVE_CALL_STATUSES.has(call.data.status) ? (
+                <>
+                  <Link
+                    to={`/calls/${id}/live`}
+                    className="inline-flex items-center rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white"
+                  >
+                    Open live call
+                  </Link>
+                  {call.data.provider ? (
+                    <Button
+                      variant="secondary"
+                      disabled={end.isPending || call.data.status === "ENDING"}
+                      onClick={() => end.mutate()}
+                    >
+                      {call.data.status === "ENDING" ? "Ending…" : "End call"}
+                    </Button>
+                  ) : null}
+                </>
+              ) : null}
+              {canReopen(call.data) ? (
+                <Button disabled={reopen.isPending} onClick={() => reopen.mutate()}>
+                  Reopen to fix and retry
+                </Button>
               ) : null}
               {call.data.status === "PLANNED" ? (
                 <Link
                   to={`/calls/${id}/prepare`}
                   className="inline-flex items-center rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
                 >
-                  Prepare &amp; start
+                  Edit, prepare &amp; start
                 </Link>
               ) : null}
-              {(MANUAL_ACTIONS[call.data.status] ?? []).map((a) => (
+              {(call.data.provider && call.data.status !== "PLANNED" ? [] : (MANUAL_ACTIONS[call.data.status] ?? [])).map((a) => (
                 <Button
                   key={a.to}
                   variant={a.to === "ACTIVE" ? "primary" : "secondary"}
@@ -91,7 +133,14 @@ export function CallDetailPage() {
               ))}
             </div>
           </div>
-          {update.error ? <Alert>{errorMessage(update.error)}</Alert> : null}
+          {update.error || end.error || reopen.error ? (
+            <Alert>{errorMessage(update.error ?? end.error ?? reopen.error)}</Alert>
+          ) : null}
+          {canReopen(call.data) && call.data.telephony_error ? (
+            <Alert>
+              {explainCallError(call.data.telephony_error)} You can reopen the call, correct its details and start it again.
+            </Alert>
+          ) : null}
 
           <Card title="Details">
             <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
@@ -101,11 +150,16 @@ export function CallDetailPage() {
               <Field name="Started" value={formatDateTime(call.data.started_at)} />
               <Field name="Ended" value={formatDateTime(call.data.ended_at)} />
               <Field name="Duration" value={formatDuration(call.data.duration_seconds)} />
+              {call.data.meeting_url ? <Field name="Meeting link" value={call.data.meeting_url} /> : null}
             </dl>
           </Card>
 
           {["COMPLETED", "NO_ANSWER", "FAILED", "CANCELLED"].includes(call.data.status) && call.data.provider ? (
             <PostCallPanel callId={id} />
+          ) : null}
+
+          {call.data.started_at && call.data.provider && call.data.transcript_persistence === "PERSISTED" ? (
+            <TranscriptCard callId={id} canEdit={!LIVE_CALL_STATUSES.has(call.data.status)} />
           ) : null}
 
           {call.data.status === "COMPLETED" ? <OutcomeCard call={call.data} onSave={(b) => update.mutate(b)} saving={update.isPending} /> : null}
@@ -173,6 +227,85 @@ function OutcomeCard({ call, onSave, saving }: { call: Call; onSave: (b: Partial
           </Button>
         </div>
       </div>
+    </Card>
+  );
+}
+
+/** The stored transcript. A person can correct wording; the speech-to-text output is kept as the
+ * original so what was heard and what was fixed stay distinguishable. */
+function TranscriptCard({ callId, canEdit }: { callId: string; canEdit: boolean }) {
+  const queryClient = useQueryClient();
+  const transcript = useQuery({ queryKey: ["transcript", callId], queryFn: () => liveApi.transcript(callId) });
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const save = useMutation({
+    mutationFn: (seg: Segment) => liveApi.editSegment(callId, seg.id, draft.trim()),
+    onSuccess: () => {
+      setEditing(null);
+      queryClient.invalidateQueries({ queryKey: ["transcript", callId] });
+    },
+  });
+  const speaker = (s: Segment) => (s.speaker === "CUSTOMER" ? "Customer" : s.speaker === "SALES_REP" ? "You" : "Speaker (not identified)");
+  return (
+    <Card title="Transcript">
+      <p className="mb-2 text-xs text-slate-500">
+        Audio is never recorded; only this text is kept, according to your retention policy. You can correct any line.
+      </p>
+      <QueryState isPending={transcript.isPending} error={transcript.error} empty={transcript.data?.length === 0} emptyText="No transcript was captured.">
+        <div className="space-y-2">
+          {(transcript.data ?? []).map((s) => (
+            <div key={s.id} className="text-sm">
+              {editing === s.id ? (
+                <form
+                  className="space-y-1"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (draft.trim()) save.mutate(s);
+                  }}
+                >
+                  <textarea
+                    aria-label="Edit transcript line"
+                    className="block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                    rows={2}
+                    maxLength={5000}
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                  />
+                  <div className="flex gap-2 text-xs">
+                    <button className="underline">Save</button>
+                    <button type="button" className="text-slate-500 underline" onClick={() => setEditing(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                  {save.error ? <Alert>{errorMessage(save.error)}</Alert> : null}
+                </form>
+              ) : (
+                <p>
+                  <span className="mr-1 font-medium text-slate-500">{speaker(s)}:</span>
+                  <span className="text-slate-900">{s.text}</span>
+                  {s.edited ? (
+                    <span className="ml-1 text-[10px] text-sky-700" title={s.original_text ? `Heard: ${s.original_text}` : undefined}>
+                      (edited)
+                    </span>
+                  ) : null}
+                  {canEdit ? (
+                    <button
+                      aria-label={`Edit transcript line: ${s.text}`}
+                      className="ml-1 text-xs text-slate-400"
+                      onClick={() => {
+                        setEditing(s.id);
+                        setDraft(s.text);
+                      }}
+                    >
+                      ✎
+                    </button>
+                  ) : null}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      </QueryState>
     </Card>
   );
 }

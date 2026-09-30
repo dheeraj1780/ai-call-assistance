@@ -1,11 +1,12 @@
-# Microsoft Teams
+# Microsoft Teams (optional)
 
-There are two independent capabilities:
+Teams is an **optional** provider: CallCopilot works without Microsoft 365 (phone calls via Plivo,
+CRM, knowledge, post-call). There are two independent capabilities:
 
 | Capability | Status |
 |---|---|
 | Messages (Teams chats via Microsoft Graph) | IMPLEMENTED · MOCK VERIFIED · CREDENTIAL REQUIRED · EXTERNAL PROVIDER VERIFICATION REQUIRED |
-| Real-time Call Copilot (Teams meetings) | IMPLEMENTED. The .NET gateway **compiles, passes 33 tests and runs locally in degraded mode**. Google STT adapter implemented. **A real Teams meeting is NOT TESTED.** See [teams-call-copilot.md](teams-call-copilot.md) for status and the readiness checklist |
+| Real-time Call Copilot (Teams meetings) | IMPLEMENTED. **Media path REAL-PROVIDER-VERIFIED** on a real Teams E3 meeting (join, ESTABLISHED, media AVAILABLE, 16 kHz PCM delivered to the API). The full application path (STT → copilot → UI → post-call → End) is **not yet real-verified**. See [teams-call-copilot.md](teams-call-copilot.md) |
 
 ## 1. Messaging
 

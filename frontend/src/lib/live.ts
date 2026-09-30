@@ -14,6 +14,9 @@ export interface Segment {
   speaker_confidence: number | null;
   source: string;
   is_final: boolean;
+  /** A person corrected the text; ``original_text`` is what speech recognition heard. */
+  edited?: boolean;
+  original_text?: string | null;
 }
 
 export type InsightType =
@@ -48,6 +51,7 @@ export const NOTE_KINDS = [
   "OBJECTION",
   "PREFERENCE",
   "NEXT_STEP",
+  "STAKEHOLDER",
   "IMPORTANT_FACT",
   "GENERAL",
 ] as const;
@@ -87,6 +91,10 @@ export interface LiveSnapshot {
   simulation_available: boolean;
   channel?: "PHONE" | "TEAMS" | "GOOGLE_MEET";
   transcript_persistence?: "PERSISTED" | "TRANSIENT" | "PENDING_RECORDING_STATUS";
+  /** Always false: call audio is never recorded. */
+  audio_stored?: boolean;
+  /** How long transcript text and notes are kept (company policy); null if unknown. */
+  text_retention_days?: number | null;
 }
 
 export interface LiveState extends LiveSnapshot {
@@ -122,6 +130,10 @@ export function applyEvent(state: LiveState, msg: LiveMessage): LiveState {
           ended_at: (d.ended_at as string | null | undefined) ?? next.call.ended_at,
         },
       };
+    case "transcript.edited": {
+      const seg = d as unknown as Segment;
+      return { ...next, transcript: next.transcript.map((s) => (s.id === seg.id ? { ...s, ...seg } : s)) };
+    }
     case "transcript.partial":
       return { ...next, lastTranscriptAt: Date.now(), partial: { speaker: String(d.speaker), text: String(d.text) } };
     case "transcript.final": {
@@ -221,13 +233,17 @@ export function finalisingMessage(state: LiveState): string | null {
   }
 }
 
-export const LIVE_STATUSES = new Set(["INITIATED", "RINGING", "CONNECTED", "ACTIVE"]);
+export const LIVE_STATUSES = new Set(["INITIATED", "RINGING", "CONNECTED", "ACTIVE", "ENDING"]);
 export const TERMINAL_STATUSES = new Set(["COMPLETED", "NO_ANSWER", "CANCELLED", "FAILED"]);
 
 export const liveApi = {
   snapshot: (callId: string) => apiFetch<LiveSnapshot>(`/api/v1/calls/${callId}/live`),
   start: (callId: string) => apiFetch<Call>(`/api/v1/calls/${callId}/start`, { method: "POST" }),
   end: (callId: string) => apiFetch<Call>(`/api/v1/calls/${callId}/end`, { method: "POST" }),
+  reopen: (callId: string) => apiFetch<Call>(`/api/v1/calls/${callId}/reopen`, { method: "POST" }),
+  editSegment: (callId: string, segmentId: string, text: string) =>
+    apiFetch<Segment>(`/api/v1/calls/${callId}/transcript/${segmentId}`, { method: "PATCH", body: { text } }),
+  transcript: (callId: string) => apiFetch<Segment[]>(`/api/v1/calls/${callId}/transcript`),
   simulate: (callId: string) => apiFetch<{ status: string }>(`/api/v1/calls/${callId}/simulate`, { method: "POST" }),
   dismiss: (callId: string, insightId: string) =>
     apiFetch<void>(`/api/v1/calls/${callId}/insights/${insightId}/dismiss`, { method: "POST" }),
@@ -238,3 +254,16 @@ export const liveApi = {
   deleteNote: (callId: string, noteId: string) =>
     apiFetch<void>(`/api/v1/calls/${callId}/notes/${noteId}`, { method: "DELETE" }),
 };
+
+/**
+ * What the user is told about data handling. Audio is NEVER recorded; text derived from the call
+ * follows the company's retention policy - unless the call is live-only (a provider's terms or a
+ * company choice), in which case the text is not stored after the call.
+ */
+export function retentionNotice(state: Pick<LiveSnapshot, "call" | "transcript_persistence" | "text_retention_days">): string {
+  const persistence = state.transcript_persistence ?? state.call.transcript_persistence;
+  if (persistence && persistence !== "PERSISTED")
+    return "Audio is never recorded. This call is live-only: the transcript and AI notes are shown now and are not saved after the call.";
+  const days = state.text_retention_days;
+  return `Audio is never recorded. The transcript and notes are kept${days ? ` for ${days} days` : " according to your retention policy"}.`;
+}

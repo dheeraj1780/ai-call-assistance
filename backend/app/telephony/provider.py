@@ -46,7 +46,14 @@ class Track(enum.StrEnum):
 
 
 class TelephonyError(Exception):
+    """A provider could not do what was asked. ``code`` is safe to store and show."""
+
     code = "telephony_unavailable"
+
+    def __init__(self, message: str = "", *, code: str | None = None) -> None:
+        super().__init__(message)
+        if code:
+            self.code = code[:64]
 
 
 class WebhookVerificationError(Exception):
@@ -107,7 +114,10 @@ def webhook_secret() -> bytes:
     settings = get_settings()
     if settings.telephony_webhook_secret is not None:
         return settings.telephony_webhook_secret.get_secret_value().encode()
-    # Development/test only; production requires TELEPHONY_WEBHOOK_SECRET (config validation).
+    if settings.is_production:
+        # Config validation already refuses to start without it; never derive a fallback here.
+        raise RuntimeError("TELEPHONY_WEBHOOK_SECRET is required in production")
+    # Development/test only: derived so local setups work without extra configuration.
     return hashlib.sha256(
         b"dev-telephony:" + settings.jwt_secret.get_secret_value().encode()
     ).digest()
@@ -215,6 +225,11 @@ def parse_json_media_message(message: str) -> MediaFrame | MediaControl | None:
         except (ValueError, KeyError, TypeError):
             return None
     return None
+
+
+# Providers whose audio stream can begin before the customer answered (the salesperson's leg is
+# answered first): their frames are ignored until the call is CONNECTED.
+CONNECT_GATED = frozenset({"plivo"})
 
 
 def media_parser_for(

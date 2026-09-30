@@ -13,16 +13,20 @@ Browser (React SPA) ── REST /api/v1 ─────────────�
                                         FastAPI (single process)
    routers → services → repositories → SQLAlchemy (tenant context per transaction)
         │            │                        │
-        │            ├── AIGateway ──► AIProvider (Claude | mock)
-        │            ├── EmbeddingProvider (hashing | Voyage)
+        │            ├── AIGateway ──► AIProvider (Claude | Gemini | mock)
+        │            ├── EmbeddingProvider (hashing | Voyage | Gemini)
         │            ├── CalendarProvider (Google | mock)
-        │            └── jobs worker (in-process): knowledge embedding, post-call, retention
+        │            └── jobs worker (in-process): knowledge embedding, post-call, retention,
+        │                 call recovery sweep, Teams subscription renewal
         │
-        ├── /webhooks/telephony/{provider}  ◄── provider status callbacks (signed)
-        └── /telephony/media/{provider}/{call} ◄── provider media fork (token)
+        ├── /integrations/plivo/webhooks/...  ◄── Plivo callbacks (V3 signed)  [primary phone path]
+        ├── /integrations/teams/gateway/events ◄── Teams media gateway (HMAC)  [optional]
+        ├── /calls/{id}/google-meet/...       ◄── browser Meet bridge          [optional]
+        └── /telephony/media/{provider}/{call} ◄── provider media fork (per-call token)
                  │
                  ▼
-        LiveSession ──► SpeechToTextProvider ──► final segments ──► DB (expires_at)
+        LiveSession ──► SpeechToTextProvider (Google Chirp 3; mu-law 8k → PCM16 16k)
+                 │                     ──► final segments ──► DB (expires_at) unless live-only
                  │                                              └──► LiveHub ──► browsers
                  └──► CopilotEngine (detectors, agenda, knowledge, budgeted LLM)
                                                  ▼
@@ -54,7 +58,14 @@ Browser (React SPA) ── REST /api/v1 ─────────────�
 
 ## Real-time reliability rules
 
+- Optional providers are optional: with no Teams / Google / WhatsApp integration configured the app
+  starts, and phone calls (Plivo, or the development mock) work end to end.
+- **Raw audio is never stored** (no binary column exists; a test enforces it). Text derived from a
+  call follows the company retention policy; "live-only" calls keep it in server memory for the
+  call's duration only (see PRIVACY.md).
 - The provider owns the phone call; our state follows its webhooks (browser never authoritative).
+- Start is locked per call (idempotent); End is idempotent and bounded (ENDING, then forced local
+  completion); a restart-safe recovery sweep ends stuck calls (see TELEPHONY.md).
 - Webhooks are verified, deduplicated and applied in lifecycle order only.
 - STT failures are per track, with bounded re-open; AI failures mark the copilot "degraded".
 - Browser WebSocket disconnects only end the subscription; reconnect resumes by `seq`/`epoch`.

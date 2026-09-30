@@ -2,14 +2,15 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, ConfigDict, StringConstraints
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import Principal, get_principal
 from app.calls.schemas import CallOut
 from app.common.db import get_db_session
-from app.common.errors import ErrorResponse
+from app.common.errors import ErrorResponse, NotFoundError
+from app.common.rate_limit import client_ip
 from app.postcall import service
 from app.postcall.models import DraftStatus
 
@@ -42,6 +43,22 @@ class SummaryOut(BaseModel):
     decision_maker: GroundedFieldOut
     next_step: GroundedFieldOut
     generated_at: datetime | None
+    # Provenance: a person edited the AI output (the original AI text is kept server-side).
+    edited_at: datetime | None = None
+
+
+class SummaryEdit(BaseModel):
+    """Fields a person may change; only the ones sent are updated (null/empty clears)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: Annotated[str, StringConstraints(strip_whitespace=True, max_length=8000)] | None = None
+    suggested_outcome: str | None = None
+    current_solution: Annotated[str, StringConstraints(max_length=500)] | None = None
+    budget: Annotated[str, StringConstraints(max_length=500)] | None = None
+    timeline: Annotated[str, StringConstraints(max_length=500)] | None = None
+    decision_maker: Annotated[str, StringConstraints(max_length=500)] | None = None
+    next_step: Annotated[str, StringConstraints(max_length=500)] | None = None
 
 
 class DraftOut(BaseModel):
@@ -90,6 +107,7 @@ def _summary_out(s: Any) -> SummaryOut | None:
         summary=s.summary,
         suggested_outcome=s.suggested_outcome,
         generated_at=s.generated_at,
+        edited_at=s.edited_at,
         **fields,
     )
 
@@ -116,6 +134,28 @@ async def retry_post_call(
 ) -> Response:
     await service.retry(session, principal, call_id)
     return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.patch("/post-call/summary", response_model=SummaryOut)
+async def edit_summary(
+    call_id: uuid.UUID,
+    body: SummaryEdit,
+    request: Request,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_db_session),
+) -> SummaryOut:
+    """Edit the AI-generated summary and its key fields (the user's version is the record)."""
+    summary = await service.edit_summary(
+        session,
+        principal,
+        call_id,
+        body.model_dump(exclude_unset=True),
+        ip=client_ip(request),
+    )
+    out = _summary_out(summary)
+    if out is None:  # pragma: no cover - edit_summary returns an existing row
+        raise NotFoundError("Summary not found")
+    return out
 
 
 @router.patch("/follow-ups/{draft_id}", response_model=DraftOut)

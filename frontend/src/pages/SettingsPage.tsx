@@ -17,7 +17,7 @@ export function SettingsPage() {
     <div className="mx-auto max-w-3xl space-y-4">
       <PageHeader title="Settings" />
       <Card title="Integrations">
-        <p className="mb-2 text-sm text-slate-600">Connect Microsoft Teams, WhatsApp Business and phone calling (Plivo).</p>
+        <p className="mb-2 text-sm text-slate-600">Set up phone calling (Plivo). Optional: WhatsApp Business, Microsoft Teams and Google Meet.</p>
         <Link to="/settings/integrations" className="text-sm font-medium text-slate-900 underline">
           Open Settings → Integrations
         </Link>

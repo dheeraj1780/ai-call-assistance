@@ -43,7 +43,7 @@ from tests.integration_helpers import (
 )
 
 Register = Callable[..., Awaitable[Account]]
-MEETING = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7b%7d"
+MEETING = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7b%22Tid%22%3a%2200000000-0000-0000-0000-000000000001%22%2c%22Oid%22%3a%2200000000-0000-0000-0000-000000000002%22%7d"
 SCRIPT = [
     ("agent", "Thanks for joining. How do you manage inventory today?"),
     (

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PostCall } from "../lib/postcall";
 import { TEST_SESSION, fakeAuth, renderWithAuth } from "../test/renderWithAuth";
 
-const pc = vi.hoisted(() => ({ get: vi.fn(), retry: vi.fn(), reviewDraft: vi.fn() }));
+const pc = vi.hoisted(() => ({ get: vi.fn(), retry: vi.fn(), reviewDraft: vi.fn(), editSummary: vi.fn() }));
 vi.mock("../lib/postcall", async (orig) => ({ ...(await orig<typeof import("../lib/postcall")>()), postCallApi: pc }));
 const api = vi.hoisted(() => ({ apiFetch: vi.fn() }));
 vi.mock("../lib/api", async (orig) => ({ ...(await orig<typeof import("../lib/api")>()), apiFetch: api.apiFetch }));
@@ -68,5 +68,28 @@ describe("PostCallPanel", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("call record and transcript are safe");
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(pc.retry).toHaveBeenCalledWith("c1"));
+  });
+
+  it("lets a person edit the AI summary", async () => {
+    pc.get.mockResolvedValue(bundle());
+    pc.editSummary.mockResolvedValue({});
+    renderWithAuth(<PostCallPanel callId="c1" />, { auth, path: "/", url: "/" });
+    await userEvent.click(await screen.findByRole("button", { name: "Edit summary" }));
+    const form = screen.getByRole("form", { name: "Edit summary" });
+    const box = within(form).getByLabelText("Summary");
+    await userEvent.clear(box);
+    await userEvent.type(box, "My version");
+    const budget = within(form).getByLabelText("Budget");
+    await userEvent.clear(budget);
+    await userEvent.type(budget, "3 lakh");
+    await userEvent.click(within(form).getByRole("button", { name: "Save summary" }));
+    await waitFor(() => expect(pc.editSummary).toHaveBeenCalledWith("c1", { summary: "My version", budget: "3 lakh" }));
+  });
+
+  it("explains a live-only call instead of waiting for a summary", async () => {
+    pc.get.mockResolvedValue(bundle({ summary: null, drafts: [], call: { transcript_persistence: "TRANSIENT" } as PostCall["call"] }));
+    renderWithAuth(<PostCallPanel callId="c1" />, { auth, path: "/", url: "/" });
+    expect(await screen.findByText(/live-only call: audio is never recorded/)).toBeInTheDocument();
+    expect(screen.queryByText("Preparing the summary…")).not.toBeInTheDocument();
   });
 });

@@ -14,6 +14,13 @@ class CallRepository(TenantRepository[Call]):
     def scoped(self, company_id: uuid.UUID) -> Select[tuple[Call]]:
         return super().scoped(company_id).options(joinedload(Call.contact))
 
+    async def get_locked(self, company_id: uuid.UUID, entity_id: uuid.UUID) -> Call | None:
+        """The call under ``SELECT ... FOR UPDATE`` (lifecycle commands serialise per call)."""
+        result: Call | None = await self.session.scalar(
+            self.scoped(company_id).where(Call.id == entity_id).with_for_update(of=Call)
+        )
+        return result
+
     def search(
         self,
         company_id: uuid.UUID,

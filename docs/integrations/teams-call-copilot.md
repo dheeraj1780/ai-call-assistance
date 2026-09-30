@@ -1,9 +1,17 @@
-# Teams real-time call copilot (primary POC capability)
+# Teams real-time call copilot (OPTIONAL provider)
+
+Teams is optional: CallCopilot does not need Microsoft 365. Without a Teams integration the rest
+of the product (phone calls via Plivo, CRM, knowledge, post-call) works unchanged; a planned Teams
+call simply cannot be started until an admin enables the capability.
 
 ## What works today, and what does not
 
-| Part | Status (2026-09-25) |
+| Part | Status (2026-09-30) |
 |---|---|
+| **Teams media path (real E3 tenant)**: Graph auth, bot join, ESTABLISHED, media AVAILABLE, mixed 16 kHz PCM to the API (4,556/4,556 frames, 0 dropped/malformed/reconnects), raw audio not persisted | **REAL-PROVIDER-VERIFIED** (media SDK `Microsoft.Skype.Bots.Media` 1.33.0.258-preview with `Microsoft.Graph.Communications.Calls.Media` 1.2.0.17950) |
+| Application path Teams → API → STT → copilot → React → post-call, reliable End | **NOT REAL-VERIFIED** (no Teams credentials in the implementation environment); provider-independent behaviour verified with the mock gateway |
+| Meeting links: validated at planning/edit time with the same rule the gateway's `JoinInfo.Parse` uses (classic `/l/meetup-join/...` with an organizer `Oid`); editable while PLANNED; a failed join can be re-opened, corrected and retried | IMPLEMENTED · tested |
+| Mixed audio (no salesperson id): speaker shown as "not identified"; requirement/objection/budget extraction and company-knowledge lookup still run on it (cards say "possible customer question") | IMPLEMENTED · tested |
 | API: Teams calls, gateway contract, transcript persistence rules, live pipeline, copilot | IMPLEMENTED · tested (backend suite) |
 | Google Speech-to-Text adapter | IMPLEMENTED · unit-tested. **Real Google VERIFIED** (en-IN, en-US; TTS test audio) |
 | Complete local pipeline with real Google: real-time-paced audio → Google STT → transcript → copilot (agenda, missing questions, requirements, objections, notes) → live screen → end of call → post-call | **VERIFIED 2026-09-25** with the LOCAL DEVELOPMENT AUDIO SOURCE (`backend/scripts/local_audio_call.py`). **Not Teams media** |
@@ -36,10 +44,15 @@ The gateway contains **no** business, CRM, AI or prompting logic. The API does n
 
 ## Compliance rules (enforced in code)
 
-- **Transient (default).**
+- **Live-only (default, `TRANSIENT`).** Microsoft's Graph terms for `updateRecordingStatus`: an
+  application "may NOT use the Media Access API to record or otherwise persist media content ...
+  or data derived from that media content ... without first calling the updateRecordingStatus API"
+  and receiving success (which requires Teams policy-based recording).
   - The gateway forwards audio and the API processes it in memory.
-  - No transcript, notes, cards, agenda changes or post-call summary are stored.
-  - The UI shows "Transient mode".
+  - Transcript, notes and cards are kept **in server memory for the call's duration** (a refreshed
+    screen resumes them; notes can be edited) and are not written to the database; there is no AI
+    summary after the call. The call record, outcome, action items and manual notes are kept.
+  - The UI says: "Audio is never recorded. This call is live-only …".
 - **Store transcript & AI notes (per company).**
   1. The gateway calls `UpdateRecordingStatusAsync(Recording)` **before** it opens the media socket. All participants then see Teams' recording indicator.
   2. Only after that succeeds does the gateway send `RECORDING_CONFIRMED`. The call then becomes `PERSISTED`.
@@ -77,7 +90,7 @@ The gateway contains **no** business, CRM, AI or prompting logic. The API does n
    - Run `uv run pytest tests/test_teams_stt_e2e.py`. It sends synthetic 16 kHz PCM through the real media ingest and the real `GoogleSpeechToTextProvider`, with a scripted fake Google transport, then through the live pipeline and copilot, and checks the live events.
    - Its tests cover:
      - declared-recording persistence
-     - transient mode storing nothing
+     - live-only mode storing no transcript/notes (audio is never stored in any mode)
      - media unavailable
      - an STT outage during a call
    - **Label: development / synthetic media. Not a Teams call.**
@@ -122,7 +135,7 @@ The gateway contains **no** business, CRM, AI or prompting logic. The API does n
 2. Join the meeting yourself, then click **Start**. The bot joins listen-only.
 3. The live screen should show "● Live", then "Connected", then "● Receiving transcript" as you speak.
 4. Transcript lines should appear with the correct speaker, and copilot cards should follow.
-5. Leave the meeting, or click End. The status becomes Completed. In transient mode nothing is stored.
+5. Leave the meeting, or click End. The status becomes Completed. In live-only mode no transcript or AI notes are stored (the call record, outcome and your own notes are kept).
 6. Collect these logs:
    - gateway: `teams_media_session_started` and `teams_media_session_ended`, with the frame counters
    - API: `stt_session_ended` (latencies, drops) and `copilot_llm_pass`

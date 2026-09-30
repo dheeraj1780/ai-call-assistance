@@ -95,7 +95,7 @@ async def run(
         await process_event(
             provider.name,
             TelephonyEvent(
-                event_id=f"sim-{call_id}-{events_seen}-{state}",
+                event_id=f"sim-{call_id}-{provider_call_id}-{events_seen}-{state}",
                 provider_call_id=provider_call_id,
                 state=state,
                 occurred_at=datetime.now(UTC),

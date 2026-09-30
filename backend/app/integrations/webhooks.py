@@ -412,7 +412,7 @@ async def plivo_webhook(integration_id: uuid.UUID, kind: str, request: Request) 
             await session.commit()
             return PlainTextResponse("OK")
         if cb.state is not None:
-            await telephony.process_event_for_call(
+            outcome = await telephony.process_event_for_call(
                 "plivo",
                 record.company_id,
                 call_id,
@@ -425,6 +425,10 @@ async def plivo_webhook(integration_id: uuid.UUID, kind: str, request: Request) 
                     error_code=cb.error,
                 ),
             )
+            if cb.state == ProviderCallState.CONNECTED and outcome == "applied":
+                # The customer answered (applied exactly once: duplicates and calls that are
+                # already ending/over never start a stream).
+                await _plivo_start_stream(record, call_id, cb.call_uuid, leg=_leg_of(request))
         if kind == "answer":
             return _xml(await _answer_xml(session, record, call_id, a_leg="agent"))
         if kind == "dial_action":
@@ -451,6 +455,41 @@ async def _plivo_call_id(record: Integration, cid: str | None, call_uuid: str) -
     if route is None or route.company_id != record.company_id or route.provider != "plivo":
         return None
     return route.call_id
+
+
+def _leg_of(request: Request) -> str:
+    return "customer" if request.query_params.get("leg") == "customer" else "agent"
+
+
+async def _plivo_start_stream(
+    record: Integration, call_id: uuid.UUID, call_uuid: str, *, leg: str
+) -> None:
+    """Fork the call's audio to our media WebSocket through Plivo's Audio Streams API. Needs the
+    MEDIA_STREAM capability; a failure only means no live assistance - the call continues."""
+    from app.integrations.providers import factory
+    from app.live import session as live
+
+    if Capability.MEDIA_STREAM.value not in record.enabled_capabilities:
+        live.set_media_status(call_id, "unavailable", "media_stream_disabled")
+        return
+    base = get_settings().public_base_url.rstrip("/")
+    status_url = f"{base}/api/v1/integrations/plivo/webhooks/{record.id}/stream?cid={call_id}"
+    try:
+        provider = factory.plivo_provider(
+            record, integrations.secrets_of(record), stream_enabled=True
+        )
+        start = getattr(provider, "start_stream", None)
+        if start is None:  # mock mode: the simulator feeds audio directly
+            return
+        await start(
+            call_uuid, service_url=_stream_url(call_id, leg), status_callback_url=status_url
+        )
+    except Exception as exc:
+        logger.warning(
+            "plivo_stream_start_failed",
+            extra={"call_id": str(call_id), "error": getattr(exc, "code", type(exc).__name__)},
+        )
+        live.set_media_status(call_id, "unavailable", "stream_start_failed")
 
 
 def _stream_url(call_id: uuid.UUID, a_leg: str) -> str:
@@ -482,14 +521,11 @@ async def _answer_xml(
         return plivo_adapter.hangup_xml()
     base = get_settings().public_base_url.rstrip("/")
     cb = f"{base}/api/v1/integrations/plivo/webhooks/{record.id}"
-    stream = Capability.MEDIA_STREAM.value in record.enabled_capabilities
     return plivo_adapter.answer_xml(
         customer_number=target,
         caller_id=str(record.config.get("phone_number", "")),
-        stream_url=_stream_url(call_id, a_leg) if stream else None,
-        stream_status_url=f"{cb}/stream?cid={call_id}",
-        dial_action_url=f"{cb}/dial_action?cid={call_id}",
-        dial_callback_url=f"{cb}/dial?cid={call_id}",
+        dial_action_url=f"{cb}/dial_action?cid={call_id}&leg={a_leg}",
+        dial_callback_url=f"{cb}/dial?cid={call_id}&leg={a_leg}",
     )
 
 

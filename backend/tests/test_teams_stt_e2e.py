@@ -42,7 +42,7 @@ from tests.conftest import Account, open_session
 from tests.integration_helpers import configure, validate_and_enable
 
 Register = Callable[..., Awaitable[Account]]
-MEETING = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7b%7d"
+MEETING = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7b%22Tid%22%3a%2200000000-0000-0000-0000-000000000001%22%2c%22Oid%22%3a%2200000000-0000-0000-0000-000000000002%22%7d"
 UTTERANCE_MS = 600
 # What each track "says". The fake recognizer returns these for each utterance of synthetic audio.
 SCRIPT = [

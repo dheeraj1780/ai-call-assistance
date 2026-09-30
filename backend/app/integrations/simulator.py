@@ -212,7 +212,7 @@ async def run_teams_call(
         await handle_gateway_event(
             "teams-mock",
             GatewayEvent(
-                event_id=f"sim-{call_id}-{n}",
+                event_id=f"sim-{call_id}-{gateway_call_id}-{n}",
                 call_id=call_id,
                 gateway_call_id=gateway_call_id,
                 state=state,

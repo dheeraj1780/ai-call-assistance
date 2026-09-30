@@ -675,13 +675,17 @@ class TeamsCallingProvider:
                 }
             )
         except ProviderError as exc:
-            raise TelephonyError(f"teams gateway join failed: {exc.code}") from exc
+            raise TelephonyError(
+                f"teams gateway join failed: {exc.code}", code=f"teams_{exc.code}"
+            ) from exc
 
     async def end_call(self, provider_call_id: str) -> None:
         try:
             await self.gateway.leave(provider_call_id)
         except ProviderError as exc:
-            raise TelephonyError(f"teams gateway leave failed: {exc.code}") from exc
+            raise TelephonyError(
+                f"teams gateway leave failed: {exc.code}", code=f"teams_{exc.code}"
+            ) from exc
 
     def verify_webhook(self, headers: dict[str, str], body: bytes) -> None:
         raise WebhookRejectedError("use the Teams gateway events endpoint")

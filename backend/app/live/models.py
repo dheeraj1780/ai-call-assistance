@@ -49,6 +49,12 @@ class TranscriptSegment(UUIDPrimaryKeyMixin, TenantScopedMixin, CreatedAtMixin, 
             ondelete="CASCADE",
             name="fk_transcript_segments_call",
         ),
+        ForeignKeyConstraint(
+            ["company_id", "edited_by_user_id"],
+            ["company_members.company_id", "company_members.user_id"],
+            ondelete="SET NULL (edited_by_user_id)",
+            name="fk_transcript_segments_editor_member",
+        ),
         Index("ix_transcript_segments_company_id_call_id", "company_id", "call_id", "seq"),
         Index("ix_transcript_segments_expires_at", "expires_at"),
     )
@@ -64,3 +70,8 @@ class TranscriptSegment(UUIDPrimaryKeyMixin, TenantScopedMixin, CreatedAtMixin, 
     stt_confidence: Mapped[float | None] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(32), nullable=False)  # STT provider name
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Human correction of the STT text. ``text`` always holds the current text (what the copilot,
+    # summary and UI use); the first edit keeps the machine output in ``original_text``.
+    original_text: Mapped[str | None] = mapped_column(Text)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    edited_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

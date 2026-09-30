@@ -83,12 +83,22 @@ GUID = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F
 DIGITS = r"^[0-9]{5,32}$"
 E164 = r"^\+[1-9][0-9]{6,14}$"
 
+# Audio is NEVER recorded or stored, whatever is chosen here: this only decides whether the TEXT
+# derived from a Teams meeting (transcript, AI notes, summary) may be kept. Microsoft's Graph terms
+# for updateRecordingStatus: an application "may NOT ... record or otherwise persist media content
+# ... or data derived from that media content" without first calling updateRecordingStatus and
+# receiving success - which requires Teams policy-based recording. Hence live-only by default.
 TEAMS_PERSISTENCE_OPTIONS = (
-    ("TRANSIENT", "Transient: nothing derived from call audio is stored (default)"),
+    (
+        "TRANSIENT",
+        "Live-only (default): transcript and AI notes are shown during the meeting and not kept "
+        "afterwards. Audio is never recorded.",
+    ),
     (
         "RECORDING_DECLARED",
-        "Store transcript & AI notes: the bot declares recording in Teams "
-        "(all participants see the recording indicator)",
+        "Keep transcript text & AI notes (retention policy): the bot sets Teams' recording status "
+        "first, so all participants see the recording indicator; needs Teams policy-based "
+        "recording. Audio is still never recorded.",
     ),
 )
 
@@ -129,11 +139,12 @@ TEAMS = ProviderSpec(
         ),
         FieldSpec(
             "call_persistence",
-            "Teams call transcript storage",
+            "Teams meeting text retention",
             "select",
             True,
-            "Microsoft requires bots to declare recording before storing anything derived from "
-            "call media. Transient mode shows live assistance only.",
+            "Audio is never recorded. Microsoft requires a bot to set the call's recording status "
+            "before keeping anything derived from meeting media (such as a transcript), so "
+            "live-only is the default.",
             options=TEAMS_PERSISTENCE_OPTIONS,
             default="TRANSIENT",
             capabilities=(Capability.REAL_TIME_CALL,),
@@ -304,11 +315,15 @@ PLIVO = ProviderSpec(
 )
 
 MEET_PERSISTENCE_OPTIONS = (
-    ("TRANSIENT", "Transient: live assistance only; nothing derived from meeting audio is stored"),
+    (
+        "TRANSIENT",
+        "Live-only: transcript and AI notes are shown during the meeting and not kept afterwards. "
+        "Audio is never recorded.",
+    ),
     (
         "PERSISTED",
-        "Store transcript & AI notes: only with the participants' consent (Google shows them "
-        "that an app is accessing the meeting)",
+        "Keep transcript text & AI notes (retention policy): only with the participants' consent "
+        "(Google shows them that an app is accessing the meeting). Audio is never recorded.",
     ),
 )
 
@@ -322,11 +337,11 @@ GOOGLE_MEET = ProviderSpec(
     fields=(
         FieldSpec(
             "call_persistence",
-            "Meeting transcript storage",
+            "Meeting text retention",
             "select",
             True,
-            "Transient mode shows live assistance only. Store the transcript only when the "
-            "participants have agreed.",
+            "Audio is never recorded. Keep the transcript text only when the participants have "
+            "agreed; live-only shows assistance during the meeting.",
             options=MEET_PERSISTENCE_OPTIONS,
             default="TRANSIENT",
             capabilities=(Capability.REAL_TIME_CALL,),
@@ -392,8 +407,9 @@ def requirements(spec: ProviderSpec, ctx: RequirementContext) -> list[Requiremen
     public_https = s.public_base_url.startswith("https://")
     stt_real = s.stt_provider != "mock"
     stt_hint = (
-        "Live transcription of real call audio needs a streaming speech-to-text provider. "
-        "Only the mock STT exists in this version (it cannot transcribe real audio)."
+        "Live transcription of real call audio needs a streaming speech-to-text provider: set "
+        "STT_PROVIDER=google (Google Cloud Speech-to-Text, Chirp 3) on the server. The mock STT "
+        "cannot transcribe real audio."
     )
     missing_perms = (ctx.last_test or {}).get("missing_permissions") or []
     if spec.provider == Provider.MICROSOFT_TEAMS:

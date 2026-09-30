@@ -1,7 +1,10 @@
 # Telephony
 
-**Status: provider-independent architecture IMPLEMENTED; only a MOCK provider exists.
-LIVE PROVIDER INTEGRATION NOT VERIFIED — no real phone call has been placed.**
+**Status (2026-09-30): provider-independent architecture IMPLEMENTED. Providers: mock
+(development), **Plivo** (primary phone path; MOCK-VERIFIED, BLOCKED-BY-CREDENTIALS for a real
+call - see [integrations/plivo.md](integrations/plivo.md)), Microsoft Teams (optional; media path
+REAL-PROVIDER-VERIFIED through the gateway), Google Meet (optional; fakes only). No real phone
+call has been placed from this repository.**
 
 ## Target flow (ADR-007)
 
@@ -21,7 +24,12 @@ without dropping the call; they only lose live assistance.
 | Piece | Status | Where |
 |---|---|---|
 | `TelephonyProvider` interface (`create_call`, `end_call`, `verify_webhook`, `parse_webhook`, `parse_media_message`) | IMPLEMENTED | `app/telephony/provider.py` |
-| Provider-neutral call lifecycle: PLANNED → INITIATED → RINGING → CONNECTED → ACTIVE → COMPLETED / NO_ANSWER / FAILED / CANCELLED | IMPLEMENTED | `app/calls/models.py`, `app/telephony/service.py` |
+| Provider-neutral call lifecycle: PLANNED → INITIATED → RINGING → CONNECTED → ACTIVE → ENDING → COMPLETED / NO_ANSWER / FAILED / CANCELLED | IMPLEMENTED, tested | `app/calls/models.py`, `app/telephony/service.py` |
+| Idempotent, concurrency-safe Start (`SELECT … FOR UPDATE`; a repeated Start returns the live call; one provider call) | IMPLEMENTED, tested | `telephony.service.start_call` |
+| Idempotent, bounded End for every provider (ENDING → provider hang-up → wait ≤ `CALL_END_GRACE_SECONDS` → forced local completion; media/STT closed; post-call queued) | IMPLEMENTED, tested | `telephony.service.request_end` |
+| Re-open a call that never connected (failed start, cancelled, no answer) → PLANNED, editable, startable again | IMPLEMENTED, tested | `POST /calls/{id}/reopen` |
+| Restart-safe stale-call recovery (periodic `calls.recover`, DB-driven, idempotent) | IMPLEMENTED, tested | `app/telephony/recovery.py` |
+| Media stream closes server-side once a call is ENDING/finished; early media before CONNECTED ignored (Plivo) | IMPLEMENTED, tested | `telephony.service.MediaIngest` |
 | Webhook verification (HMAC-SHA256 over `timestamp.body`, 5-minute replay window) | IMPLEMENTED (mock scheme) | `MockTelephonyProvider.verify_webhook` |
 | Idempotency: unique `(provider, event_id)`; duplicates acknowledged, not re-applied | IMPLEMENTED, tests written | `telephony_webhook_events` |
 | Ordering: states only move forward; nothing changes after a terminal state | IMPLEMENTED, tests written | `apply_state` rank table |
@@ -91,3 +99,36 @@ Ozonetel and Knowlarity were not evaluated in this pass.
 3. Point a real STT provider at the provider's audio format (`SpeechToTextProvider`).
 4. Verify with real calls: connectivity, tracks, latency, call survival when our WebSocket drops,
    duplicate/out-of-order webhooks, and media residency.
+
+## Lifecycle guarantees (2026-09-30)
+
+- **Start** locks the call row, so double clicks / retries / concurrent requests place exactly one
+  provider call; a Start on a call that is already live returns it (200). Any provider failure -
+  including an unexpected exception - marks the call FAILED with a `telephony_error` code instead of
+  leaving it INITIATED.
+- **Failed start recovery:** `POST /calls/{id}/reopen` turns a call that never connected back into
+  PLANNED (provider link and route cleared, history kept on the timeline). Its details (meeting link,
+  language, objective, schedule) can then be corrected with `PATCH /calls/{id}` and it can be started
+  again. A call that connected cannot be re-opened (plan a new one).
+- **End** is provider-neutral: ENDING is committed first (a restart cannot lose the intent), the
+  provider is asked to hang up once, and the provider's confirmation is awaited for at most
+  `CALL_END_GRACE_SECONDS` (default 8). Without it the call is completed locally: COMPLETED if it
+  ever connected, otherwise CANCELLED. Late provider events can never move a call backwards.
+- **Recovery sweep** (`calls.recover`, every 60 s, from the job worker): reads in-flight calls through
+  a read-only RLS policy that exists only inside `app.system_task = 'call_recovery'`, then acts per
+  call under its own tenant context:
+
+  | Condition | Action |
+  |---|---|
+  | INITIATED without a provider call id for > `CALL_START_STALE_SECONDS` (120) | FAILED `start_interrupted` |
+  | INITIATED/RINGING without activity for > `CALL_CONNECTING_TIMEOUT_SECONDS` (600) | hang up, FAILED `connect_timeout` |
+  | CONNECTED/ACTIVE without media or events for > `CALL_INACTIVITY_TIMEOUT_MINUTES` (30) | hang up, COMPLETED `inactivity_timeout` |
+  | any live call older than `CALL_MAX_DURATION_HOURS` (8) | hang up, COMPLETED `max_duration` |
+  | ENDING longer than the grace period + 5 s | COMPLETED (forced) |
+  | finished but end-of-call processing never recorded (`finalized_at` NULL > 60 s) | re-run drain + post-call enqueue |
+
+  `last_activity_at` is refreshed (throttled, every 15 s) by the media stream and by every provider
+  event, so a quiet but healthy call is never ended.
+- **Browser disconnects** never affect a call. A reconnecting live screen gets a `hello` with the
+  call's current status and reloads the snapshot (the server is authoritative); it never creates a
+  new call.

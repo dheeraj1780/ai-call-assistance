@@ -164,13 +164,41 @@ async def test_session_config_is_explicit() -> None:
     assert not first.audio
 
 
-async def test_mulaw_telephony_audio_config() -> None:
+async def test_mulaw_telephony_audio_is_normalised_to_pcm16_16k() -> None:
+    """Plivo streams G.711 mu-law at 8 kHz. It is decoded and upsampled to PCM16 16 kHz before
+    recognition, so every provider reaches the recogniser in ONE format (as Teams/Meet do)."""
     client = FakeClient(echo())
     s = stream(client, sample_rate=8000, encoding="mulaw")
+    # 250 ms of telephony audio = 2000 mu-law bytes -> 8000 bytes PCM16 16 kHz.
+    await s.send(bytes([0xFF]) * 2000)  # 0xFF = digital silence in mu-law
+    results = await collect(s, 2)
+    await s.finish()
     await s.close()
     cfg = client.requests[0][0].streaming_config.config
-    assert cfg.explicit_decoding_config.encoding == t.ExplicitDecodingConfig.AudioEncoding.MULAW
-    assert cfg.explicit_decoding_config.sample_rate_hertz == 8000
+    assert cfg.explicit_decoding_config.encoding == t.ExplicitDecodingConfig.AudioEncoding.LINEAR16
+    assert cfg.explicit_decoding_config.sample_rate_hertz == 16000
+    audio = [r.audio for r in client.requests[0] if r.audio]
+    assert sum(len(a) for a in audio) == 8000  # everything flushed, at 16 kHz PCM16 size
+    assert set(audio[0]) == {0}  # mu-law silence decodes to PCM zero
+    # Offsets are real milliseconds: the first chunk (STT_CHUNK_MS) of 16 kHz PCM16 audio.
+    assert results[-1].end_ms == len(audio[0]) // 32
+
+
+def test_g711_decoder_matches_the_itu_table_and_is_seamless_across_chunks() -> None:
+    from app.speech.g711 import MULAW_TO_PCM, MulawTo16kPcm
+
+    assert MULAW_TO_PCM[0xFF] == 0
+    assert MULAW_TO_PCM[0x7F] == 0
+    assert MULAW_TO_PCM[0x00] == -32124
+    assert MULAW_TO_PCM[0x80] == 32124
+    assert MULAW_TO_PCM[0x8F] == 16764
+    assert MULAW_TO_PCM[0x0F] == -16764
+    data = bytes(range(256)) * 4
+    whole = MulawTo16kPcm().process(data)
+    split = MulawTo16kPcm()
+    parts = split.process(data[:333]) + split.process(data[333:])
+    assert whole == parts  # interpolation state carries over chunk boundaries
+    assert len(whole) == len(data) * 4  # 2x samples, 2 bytes each
 
 
 @pytest.mark.parametrize(("language", "encoding"), [("fr-FR", "linear16"), ("en-IN", "opus")])

@@ -19,9 +19,6 @@ class Detection:
     confidence: float
     category: ObjectionCategory | None = None
     key: str = ""  # dedupe key suffix
-    # Conversation-state bucket when it differs from the kind's default (see copilot/state.py):
-    # "fact" (e.g. scale), "commitment", "decision".
-    bucket: str = ""
 
 
 def _rx(*patterns: str) -> re.Pattern[str]:
@@ -99,9 +96,7 @@ NUMBER_WORDS = {
         "fifteen sixteen seventeen eighteen nineteen twenty".split()
     )
 } | {"thirty": 30, "forty": 40, "fifty": 50, "hundred": 100}
-_NUMBER = r"\d{1,3}(?:,\d{2,3})+|\d{1,6}|" + "|".join(
-    sorted(NUMBER_WORDS, key=len, reverse=True)
-)
+_NUMBER = r"\d{1,3}(?:,\d{2,3})+|\d{1,6}|" + "|".join(sorted(NUMBER_WORDS, key=len, reverse=True))
 SCALE = re.compile(
     rf"\b(?P<n>{_NUMBER})\s+(?P<unit>branches|locations|stores|shops|outlets|warehouses|godowns"
     r"|factories|users|employees|staff|salespeople|orders|invoices|skus|products|trucks)\b",
@@ -242,7 +237,6 @@ def detect(text: str, *, speaker_is_customer: bool) -> list[Detection]:
                     f"{_number(m.group('n'))} {unit}",
                     0.7,
                     key=f"scale:{unit}",
-                    bucket="fact",
                 )
             )
         m = NEED.search(text)
@@ -264,30 +258,23 @@ def detect(text: str, *, speaker_is_customer: bool) -> list[Detection]:
             found.append(Detection(NoteKind.DECISION_MAKER, _clip(text), 0.65, key=_key(text)))
         if not is_question(text):
             for m in STAKEHOLDER.finditer(text):
-                role = " ".join(w.upper() if len(w) <= 3 else w.capitalize()
-                                for w in m.group("role").split())
+                role = " ".join(
+                    w.upper() if len(w) <= 3 else w.capitalize() for w in m.group("role").split()
+                )
                 found.append(
                     Detection(NoteKind.STAKEHOLDER, role, 0.65, key=f"role:{role.lower()}")
                 )
     commitment = None if is_question(text) else COMMITMENT.search(text)
     if commitment:
         clause = _clause(text, COMMITMENT)
-        found.append(
-            Detection(
-                NoteKind.NEXT_STEP, _clip(clause), 0.65, key=_key(clause), bucket="commitment"
-            )
-        )
+        found.append(Detection(NoteKind.NEXT_STEP, _clip(clause), 0.65, key=_key(clause)))
     else:
         m = NEXT_STEP.search(text)
         if m:
             found.append(Detection(NoteKind.NEXT_STEP, _clip(text), 0.6, key=m.group(0).lower()))
     if DECISION.search(text) and not is_question(text):
         clause = _clause(text, DECISION)
-        found.append(
-            Detection(
-                NoteKind.IMPORTANT_FACT, _clip(clause), 0.6, key=_key(clause), bucket="decision"
-            )
-        )
+        found.append(Detection(NoteKind.IMPORTANT_FACT, _clip(clause), 0.6, key=_key(clause)))
     return found
 
 

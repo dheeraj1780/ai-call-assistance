@@ -1,7 +1,9 @@
 # Communication integrations — overview
 
-CallCopilot is an **AI customer-conversation copilot**. Phone, Microsoft Teams and WhatsApp are
-*adapters* around one conversation model and one AI engine.
+CallCopilot is an **AI customer-conversation copilot**. Phone (Plivo - the primary calling path),
+Microsoft Teams, Google Meet and WhatsApp are *adapters* around one conversation model and one AI
+engine. Only the phone path is needed for normal use; **Microsoft 365, Google Workspace and
+WhatsApp Business are optional.**
 
 ## Status labels used in these documents
 
@@ -9,6 +11,9 @@ CallCopilot is an **AI customer-conversation copilot**. Phone, Microsoft Teams a
 |---|---|
 | IMPLEMENTED | Code exists and is covered by automated tests |
 | MOCK VERIFIED | Exercised end to end with mock providers / `httpx.MockTransport` (no real provider contacted) |
+| LOCALLY VERIFIED | Run for real on a developer machine (e.g. real Google STT with local audio), not through the provider |
+| REAL-PROVIDER VERIFIED | Run against the real provider (credentials, public endpoint) |
+| BLOCKED BY CREDENTIALS | Code complete and mock-verified; a real run needs credentials / public https that were not available |
 | CREDENTIAL REQUIRED | Needs your credentials before it can run for real |
 | EXTERNAL PROVIDER VERIFICATION REQUIRED | Never run against the real provider; formats follow official docs/SDKs |
 | NOT SUPPORTED | Deliberately not offered (reason given) |

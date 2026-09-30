@@ -1,10 +1,11 @@
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { MeetCopilotPanel } from "../components/MeetCopilotPanel";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 
 import { Badge, QueryState } from "../components/common";
 import { Alert, Button } from "../components/ui";
-import { label } from "../lib/crm";
+import { canReopen, explainCallError, label } from "../lib/crm";
 import { errorMessage } from "../lib/errors";
 import {
   LIVE_STATUSES,
@@ -14,6 +15,8 @@ import {
   NOTE_KINDS,
   TERMINAL_STATUSES,
   liveApi,
+  retentionNotice,
+  type Segment,
   visibleInsights,
   type CallNote,
   type Insight,
@@ -78,9 +81,12 @@ export function LiveCallPage() {
           <div className="grid gap-4 lg:grid-cols-12">
             <div className={`${tab === "agenda" ? "" : "hidden"} lg:col-span-3 lg:block`}>
               <AgendaPanel callId={id} agenda={state.agenda} onChange={(item) => patch((s) => ({ ...s, agenda: s.agenda.map((a) => (a.id === item.id ? item : a)) }))} />
+              <div className="mt-4">
+                <ContextPanel callId={id} />
+              </div>
             </div>
             <div className={`${tab === "transcript" ? "" : "hidden"} lg:col-span-5 lg:block`}>
-              <TranscriptPanel state={state} />
+              <TranscriptPanel state={state} callId={id} patch={patch} />
             </div>
             <div className={`${tab === "copilot" || tab === "notes" ? "" : "hidden"} space-y-4 lg:col-span-4 lg:block`}>
               <div className={`${tab === "copilot" ? "" : "hidden"} lg:block`}>
@@ -121,6 +127,14 @@ function channelLabel(channel: string | undefined): string {
   return "Phone";
 }
 
+function audioState(state: LiveState): string | null {
+  const s = state.call.status;
+  if (!["CONNECTED", "ACTIVE"].includes(s)) return null;
+  if (state.pipeline.media === "unavailable") return "Audio: not reaching the copilot";
+  if (s === "ACTIVE") return "Audio: receiving";
+  return "Audio: waiting for the stream";
+}
+
 function Header({
   state,
   connection,
@@ -134,61 +148,110 @@ function Header({
   run: (fn: () => Promise<unknown>) => void;
   callId: string;
 }) {
+  const navigate = useNavigate();
   const { call } = state;
   const elapsed = useElapsed(call.started_at, call.ended_at);
   const live = LIVE_STATUSES.has(call.status);
+  const ending = call.status === "ENDING";
   const ended = TERMINAL_STATUSES.has(call.status);
+  const audio = audioState(state);
+  const failure = explainCallError(call.telephony_error);
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-          Live call · Channel: {channelLabel(state.channel ?? call.channel)}
-        </p>
-        <div className="flex items-center gap-2">
-          <Link to={`/contacts/${call.contact.id}`} className="truncate text-lg font-semibold text-slate-900">
-            {call.contact.name}
-          </Link>
-          <Badge value={call.status} />
-          <span className="font-mono text-lg tabular-nums text-slate-700" aria-label="Call duration">
-            {elapsed}
-          </span>
+    <div className="space-y-2">
+      <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <Link to={`/calls/${callId}`} className="underline">
+              Call record
+            </Link>{" "}
+            · Live call · Channel: {channelLabel(state.channel ?? call.channel)}
+          </p>
+          <div className="flex items-center gap-2">
+            <Link to={`/contacts/${call.contact.id}`} className="truncate text-lg font-semibold text-slate-900">
+              {call.contact.name}
+            </Link>
+            <Badge value={call.status} />
+            <span className="font-mono text-lg tabular-nums text-slate-700" aria-label="Call duration">
+              {elapsed}
+            </span>
+          </div>
+          {call.objective ? <p className="truncate text-sm text-slate-500">{call.objective}</p> : null}
         </div>
-        {call.objective ? <p className="truncate text-sm text-slate-500">{call.objective}</p> : null}
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={`text-xs ${connection === "live" ? "text-emerald-700" : "text-amber-700"}`}
+            title="Connection between this screen and the server. The call itself does not depend on it: reconnecting resumes it."
+          >
+            {connection === "live"
+              ? "● Live"
+              : connection === "offline"
+                ? "○ Offline"
+                : connection === "connecting"
+                  ? "○ Connecting…"
+                  : "○ Reconnecting…"}
+          </span>
+          {audio ? <span className="text-xs text-slate-500">{audio}</span> : null}
+          {call.status === "PLANNED" ? (
+            <>
+              <Link
+                to={`/calls/${callId}/prepare`}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700"
+              >
+                Edit details
+              </Link>
+              <Button disabled={busy} onClick={() => run(() => liveApi.start(callId))}>
+                Start call
+              </Button>
+            </>
+          ) : null}
+          {call.status === "INITIATED" && state.simulation_available ? (
+            <Button variant="secondary" disabled={busy} onClick={() => run(() => liveApi.simulate(callId))}>
+              Simulate conversation (mock)
+            </Button>
+          ) : null}
+          {live ? (
+            <button
+              type="button"
+              disabled={busy || ending}
+              onClick={() => run(() => liveApi.end(callId))}
+              className="rounded-md bg-rose-700 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-800 disabled:opacity-60"
+            >
+              {ending ? "Ending…" : "End call"}
+            </button>
+          ) : null}
+          {ended ? (
+            <Link to={`/calls/${callId}`} className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white">
+              View summary
+            </Link>
+          ) : null}
+        </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span
-          className={`text-xs ${connection === "live" ? "text-emerald-700" : "text-amber-700"}`}
-          title="Connection between this screen and the server. The phone call does not depend on it."
-        >
-          {connection === "live"
-            ? "● Live"
-            : connection === "offline"
-              ? "○ Offline"
-              : connection === "connecting"
-                ? "○ Connecting…"
-                : "○ Reconnecting…"}
-        </span>
-        {call.status === "PLANNED" ? (
-          <Button disabled={busy} onClick={() => run(() => liveApi.start(callId))}>
-            Start call
-          </Button>
-        ) : null}
-        {call.status === "INITIATED" && state.simulation_available ? (
-          <Button variant="secondary" disabled={busy} onClick={() => run(() => liveApi.simulate(callId))}>
-            Simulate conversation (mock)
-          </Button>
-        ) : null}
-        {live ? (
-          <Button variant="secondary" disabled={busy} onClick={() => run(() => liveApi.end(callId))}>
-            End call
-          </Button>
-        ) : null}
-        {ended ? (
-          <Link to={`/calls/${callId}`} className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white">
-            View summary
-          </Link>
-        ) : null}
-      </div>
+      {ending ? (
+        <p role="status" className="text-xs text-slate-500">
+          Ending the call… waiting for the provider to confirm; it will be closed here automatically if it does not.
+        </p>
+      ) : null}
+      {ended && canReopen(call) ? (
+        <div role="alert" className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+          <p>
+            This call did not connect{failure ? `: ${failure}` : "."} Nothing was recorded. You can correct the details (for example
+            the meeting link) and try again.
+          </p>
+          <div className="mt-2">
+            <Button
+              disabled={busy}
+              onClick={() =>
+                run(async () => {
+                  await liveApi.reopen(callId);
+                  navigate(`/calls/${callId}/prepare`);
+                })
+              }
+            >
+              Fix details and retry
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -197,6 +260,9 @@ const MEDIA_REASON: Record<string, string> = {
   recording_status_failed:
     "Teams did not confirm the recording status, so no call audio is processed (compliance).",
   media_socket_connect_failed: "The Teams media gateway could not reach the server.",
+  media_stream_disabled:
+    "Real-time audio is not enabled for phone calls (an admin can enable it in Settings → Integrations → Plivo).",
+  stream_start_failed: "The phone provider could not start the audio stream.",
 };
 
 function useNow(active: boolean): number {
@@ -246,18 +312,23 @@ function PipelineBanner({ state }: { state: LiveState }) {
     );
   if (state.pipeline.stt === "unavailable")
     messages.push(`Live transcription is interrupted. Your ${teams ? "Teams meeting" : "phone call"} continues normally.`);
-  const persistence = state.transcript_persistence ?? state.call.transcript_persistence;
-  if (persistence && persistence !== "PERSISTED")
-    messages.push(
-      "Transient mode: the transcript and AI notes are shown live only and are not stored after the call.",
-    );
   if (state.pipeline.copilot === "degraded")
     messages.push("AI suggestions are temporarily limited. Transcript and notes keep working.");
-  if (!messages.length) return null;
+  const liveOnly = (state.transcript_persistence ?? state.call.transcript_persistence ?? "PERSISTED") !== "PERSISTED";
   return (
-    <div role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-      {messages.join(" ")}
-    </div>
+    <>
+      {messages.length ? (
+        <div role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          {messages.join(" ")}
+        </div>
+      ) : null}
+      <p
+        className={`text-xs ${liveOnly ? "rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800" : "text-slate-500"}`}
+        aria-label="Data handling"
+      >
+        {retentionNotice(state)}
+      </p>
+    </>
   );
 }
 
@@ -319,11 +390,78 @@ function AgendaPanel({ callId, agenda, onChange }: { callId: string; agenda: Age
   );
 }
 
-function TranscriptPanel({ state }: { state: LiveState }) {
+/** Customer context from the planning data (previous calls, known requirements and objections). */
+function ContextPanel({ callId }: { callId: string }) {
+  const prep = useQuery({ queryKey: ["prep", callId], queryFn: () => prepApi.prep(callId) });
+  const data = prep.data;
+  if (!data) return null;
+  const known = [...data.known_requirements, ...data.known_objections].slice(0, 6);
+  const last = data.previous_calls[0];
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-3" aria-label="Customer context">
+      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Customer context</h2>
+      <p className="text-sm font-medium text-slate-900">
+        {data.contact.name}
+        {data.contact.organization ? <span className="font-normal text-slate-500"> · {data.contact.organization}</span> : null}
+      </p>
+      {last ? (
+        <p className="mt-1 text-xs text-slate-600">
+          Last call: {last.summary ?? last.objective ?? "no summary"}
+          {last.next_step ? ` — next step: ${last.next_step}` : ""}
+        </p>
+      ) : (
+        <p className="mt-1 text-xs text-slate-500">No earlier calls.</p>
+      )}
+      {known.length ? (
+        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-slate-600">
+          {known.map((k, i) => (
+            <li key={i}>
+              {label(k.kind)}: {k.text}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {data.open_action_items.length ? (
+        <p className="mt-1 text-xs text-slate-600">{data.open_action_items.length} open action item(s).</p>
+      ) : null}
+    </section>
+  );
+}
+
+function speakerLabel(speaker: Segment["speaker"]): string {
+  if (speaker === "CUSTOMER") return "Customer";
+  if (speaker === "SALES_REP") return "You";
+  // Mixed audio (Teams/Meet): who spoke is not known. Shown as such, never guessed.
+  return "Speaker (not identified)";
+}
+
+function TranscriptPanel({
+  state,
+  callId,
+  patch,
+}: {
+  state: LiveState;
+  callId: string;
+  patch: (fn: (s: LiveState) => LiveState) => void;
+}) {
   const endRef = useRef<HTMLDivElement>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<unknown>(null);
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [state.transcript.length, state.partial]);
+
+  async function save(seg: Segment) {
+    setError(null);
+    try {
+      const updated = await liveApi.editSegment(callId, seg.id, draft.trim());
+      patch((s) => ({ ...s, transcript: s.transcript.map((x) => (x.id === seg.id ? { ...x, ...updated } : x)) }));
+      setEditing(null);
+    } catch (e) {
+      setError(e);
+    }
+  }
   return (
     <section className="flex h-[60vh] flex-col rounded-lg border border-slate-200 bg-white" aria-label="Live transcript">
       <h2 className="border-b border-slate-100 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -336,18 +474,61 @@ function TranscriptPanel({ state }: { state: LiveState }) {
           </p>
         ) : null}
         {state.transcript.map((s) => (
-          <p key={s.id} className="text-sm leading-snug">
-            <span className={`mr-1 font-medium ${s.speaker === "CUSTOMER" ? "text-sky-700" : "text-slate-500"}`}>
-              {s.speaker === "CUSTOMER" ? "Customer" : s.speaker === "SALES_REP" ? "You" : "Speaker"}:
-            </span>
-            <span className="text-slate-900">{s.text}</span>
-          </p>
+          <div key={s.id} className="text-sm leading-snug">
+            {editing === s.id ? (
+              <form
+                className="space-y-1"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (draft.trim()) void save(s);
+                }}
+              >
+                <textarea
+                  aria-label="Edit transcript line"
+                  className="block w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                  rows={2}
+                  maxLength={5000}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                />
+                <div className="flex gap-2 text-xs">
+                  <button className="underline">Save</button>
+                  <button type="button" className="text-slate-500 underline" onClick={() => setEditing(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <p>
+                <span className={`mr-1 font-medium ${s.speaker === "CUSTOMER" ? "text-sky-700" : "text-slate-500"}`}>
+                  {speakerLabel(s.speaker)}:
+                </span>
+                <span className="text-slate-900">{s.text}</span>
+                {s.edited ? (
+                  <span className="ml-1 text-[10px] text-sky-700" title={s.original_text ? `Heard: ${s.original_text}` : undefined}>
+                    (edited)
+                  </span>
+                ) : null}
+                <button
+                  aria-label={`Edit transcript line: ${s.text}`}
+                  className="ml-1 text-xs text-slate-400"
+                  onClick={() => {
+                    setEditing(s.id);
+                    setDraft(s.text);
+                  }}
+                >
+                  ✎
+                </button>
+              </p>
+            )}
+          </div>
         ))}
         {state.partial ? (
           <p className="text-sm italic text-slate-400" aria-live="polite">
             {state.partial.text}…
           </p>
         ) : null}
+        {error ? <Alert>{errorMessage(error)}</Alert> : null}
         <div ref={endRef} />
       </div>
     </section>

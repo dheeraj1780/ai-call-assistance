@@ -1,17 +1,44 @@
 # PROJECT STATUS — AI Calling Copilot (MSME)
 
-_Last updated: 2026-09-25 (local call copilot verified with real Google STT)._ This file is the hand-off point for any future session._
+_Last updated: 2026-09-30 (call-reliability + Plivo-first implementation pass)._ This file is the hand-off point for any future session._
 
-- **Current branch:** `phase-2-crm` (local only, **not pushed**; all MVP phases live here)
-- **`main`:** Phase 1 (`d2815f9`, pushed) + staging deploy config (`c0903f6`, **not pushed**)
-- **Last commit:** see `git log -1` (docs + final audit on `phase-2-crm`)
 - **Deployment:** **NOT DEPLOYED** (intentionally deferred; see `docs/DEVELOPMENT.md`)
-- **Next step:** controlled real-provider tests, one provider at a time, with the user's
-  credentials (see `docs/integrations/testing.md`); then a deployment/Render verification phase.
+- **Product direction:** Microsoft 365 / Teams is **optional**. Plivo phone calling is the primary
+  real calling path; Teams, Google Meet and WhatsApp are optional providers. One provider-neutral
+  call/AI pipeline. **Raw audio is never stored or recorded.**
+- **Verification:** see `FINAL_MVP_AUDIT.md` (labels REAL-PROVIDER-VERIFIED / LOCALLY-VERIFIED /
+  MOCK-VERIFIED / BLOCKED-BY-CREDENTIALS).
+- **Next step:** controlled real Plivo call with public https + real Google STT, real LLM check
+  (`backend/scripts/ai_smoke.py`), then Teams application-level E2E.
+
+## Call reliability and data model — implemented 2026-09-30 (migration `0013_call_reliability`)
+
+| Item | Status |
+|---|---|
+| Edit a planned call (meeting link re-validated per channel, language, objective, schedule, assignee); fixed after start | IMPLEMENTED · MOCK-VERIFIED |
+| Re-open a call that never connected, correct it, start again | IMPLEMENTED · MOCK-VERIFIED |
+| Idempotent, concurrency-safe Start (row lock) | IMPLEMENTED · MOCK-VERIFIED |
+| Provider-neutral, idempotent, bounded End (`ENDING` state, forced local completion after `CALL_END_GRACE_SECONDS`) | IMPLEMENTED · MOCK-VERIFIED |
+| Restart-safe stale-call recovery (`calls.recover`, every 60 s) | IMPLEMENTED · MOCK-VERIFIED |
+| Reconnect/resume: `hello` carries call status; live-only state kept in server memory for the call | IMPLEMENTED · MOCK-VERIFIED |
+| Audio never stored; text follows retention; Teams live-only by default (Microsoft Graph terms) | IMPLEMENTED · MOCK-VERIFIED |
+| Editable transcript (keeps `original_text`) and summary (`EDITED`, AI text kept once), audited | IMPLEMENTED · MOCK-VERIFIED |
+| Copilot on mixed/UNKNOWN speech incl. company-knowledge lookup | IMPLEMENTED · MOCK-VERIFIED |
+| Plivo: stream via Audio Streams API only after the customer answered; no ACTIVE before CONNECTED; queued cancel; mu-law 8 kHz → PCM16 16 kHz for Chirp 3 | IMPLEMENTED · MOCK-VERIFIED · BLOCKED-BY-CREDENTIALS (real call) |
+| Plan Call is channel-neutral (server-provided channel list; phone needs no Microsoft/Google account) | IMPLEMENTED · frontend tests |
+| Live screen: prominent End, Ending state, audio state, customer context, fix-and-retry, transcript editing, STAKEHOLDER notes, correct retention notice | IMPLEMENTED · frontend tests |
+
+**Verification (2026-09-30, PostgreSQL 16.x + pgvector, non-superuser role):** backend 515 passed
+(28 new in `tests/test_call_reliability.py`), ruff + format + strict mypy clean, `alembic check`
+clean, migrations down/up verified; frontend 92 passed, typecheck, lint and production build clean.
+The .NET gateway was not rebuilt (unchanged; no .NET SDK in that environment).
+
+**Real providers in this pass:** none executed - no Plivo, LLM, Google STT or Teams credentials and
+no public https endpoint were available. Nothing is claimed as real-verified from this pass.
 
 ## Google Meet real-time meeting copilot — current focus (2026-09-25)
 
-Teams is **ON HOLD** (until a Microsoft 365 work/school tenant exists; code unchanged, Azure VM left as is). Plivo untouched.
+Google Meet is optional (history of its 2026-09-25 implementation below).
 Details: `docs/integrations/google-meet.md`, `GOOGLE-MEET-CREDENTIALS-REQUIRED.md`, `REAL-GOOGLE-MEET-TEST.md`.
 
 | Item | Status |
@@ -23,9 +50,9 @@ Details: `docs/integrations/google-meet.md`, `GOOGLE-MEET-CREDENTIALS-REQUIRED.m
 | Personal Gmail eligibility for the Developer Preview | **UNVERIFIED — possible blocker** |
 | Speaker attribution for Meet | NOT IMPLEMENTED (mixed audio, speaker Unknown) |
 
-## Teams real-time call copilot — ON HOLD (2026-09-25)
+## Teams real-time call copilot (optional) — history
 
-Plivo is intentionally paused (adapter unchanged). Details: `docs/integrations/teams-call-copilot.md`,
+The Teams media path was later REAL-PROVIDER-VERIFIED on a real E3 tenant (gateway join, media AVAILABLE, 16 kHz PCM delivered to the API). Rows below are the 2026-09-25 state. Details: `docs/integrations/teams-call-copilot.md`,
 `docs/integrations/google-stt.md`, `teams-media-gateway/README.md`.
 
 | Item | Status |
@@ -41,7 +68,7 @@ Plivo is intentionally paused (adapter unchanged). Details: `docs/integrations/t
 | Azure VM deployment script `teams-media-gateway/deploy-azure-vm.ps1` (+ `AZURE-VM-DEPLOYMENT.md`) | IMPLEMENTED · tested on the dev PC (package, dry-run, health check, Kestrel HTTPS with a store certificate) · **NOT RUN on the Azure VM yet** |
 | Gateway media platform | starts only on the Azure Windows VM with real cert/IP; locally the SDK reports `Media platform failed to initialize` |
 | Live screen: connecting / receiving / delayed / STT unavailable / Teams media unavailable / copilot analysing | IMPLEMENTED · frontend tests |
-| Real Teams meeting | **NOT TESTED** — see the readiness checklist |
+| Real Teams meeting | Media path later **REAL-PROVIDER-VERIFIED** (see top); application-level E2E not yet run |
 
 **Deadline:** the media SDK must be upgraded by ~2026-10 (Microsoft's 3-month freshness rule).
 
@@ -60,10 +87,9 @@ plivo, credentials, testing). Migration `0008_integrations`.
 | Teams real-time call copilot: API contract, mock gateway, transient/declared-recording persistence | IMPLEMENTED · MOCK VERIFIED |
 | `teams-media-gateway/` (.NET) | SOURCE ONLY — NOT BUILT (no .NET SDK here), NOT VERIFIED |
 | Plivo phone calls (outbound bridge, inbound, callbacks, V3 signatures) | IMPLEMENTED · MOCK VERIFIED · CREDENTIAL REQUIRED · EXTERNAL PROVIDER VERIFICATION REQUIRED |
-| Plivo real-time audio streaming | IMPLEMENTED · MOCK VERIFIED; blocked in LIVE mode until a real streaming STT provider is added |
+| Plivo real-time audio streaming | IMPLEMENTED · MOCK VERIFIED; superseded 2026-09-30 (Audio Streams API after answer, Google STT available) |
 
-**Blocking gap for real-time copilot on real calls:** only the mock STT exists; Plivo audio and
-Teams calling need a real streaming speech-to-text provider (a product/cost decision).
+**(Resolved since:** Google Chirp 3 STT is implemented and locally verified; see top.)
 
 Verification: backend **337 passed** (239 existing + 98 new), ruff + strict mypy clean,
 `alembic check` clean, migration 0008 up/down/up verified; frontend 49 tests passed, typecheck,

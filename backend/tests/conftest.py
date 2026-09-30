@@ -73,6 +73,8 @@ os.environ.update(
         "AI_MESSAGE_ASSIST_PROVIDER": "inherit",
         "PUBLIC_BASE_URL": "http://localhost:8000",
         "TOKEN_ENCRYPTION_KEY": "test-token-key-" + "y" * 40,
+        # End Call waits for the provider's confirmation; keep the bounded wait short in tests.
+        "CALL_END_GRACE_SECONDS": "0.5",
     }
 )
 

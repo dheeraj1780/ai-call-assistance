@@ -111,7 +111,11 @@ async def test_start_places_call_via_provider(client: AsyncClient, rep: Account)
     call = await started_call(client, rep, agenda=False)
     assert call["status"] == "INITIATED"
     again = await client.post(f"/api/v1/calls/{call['id']}/start", headers=rep.headers)
-    assert again.status_code == 409  # cannot start twice
+    # Idempotent: a repeated Start (double click / browser retry) returns the same call and
+    # never places a second provider call.
+    assert again.status_code == 200
+    assert again.json()["status"] == "INITIATED"
+    assert again.json()["id"] == call["id"]
 
 
 # ---- Full pipeline ----------------------------------------------------------------------------

@@ -184,6 +184,17 @@ class Settings(BaseSettings):
     # the recogniser emit the utterance's final result; the next audio opens a new stream. Without
     # it the last sentence of every turn waits for the speaker's next turn (or a provider timeout).
     stt_track_idle_finalize_ms: int = Field(default=800, ge=200, le=30000)
+    # ---- Call lifecycle / recovery ----------------------------------------------------------
+    # End Call waits this long for the provider to confirm the hang-up, then completes locally.
+    call_end_grace_seconds: float = Field(default=8.0, ge=0, le=60)
+    # A call still INITIATED with no provider id after this long (crash window) is failed.
+    call_start_stale_seconds: int = Field(default=120, ge=10)
+    # INITIATED/RINGING longer than this never connected: failed and cleaned up.
+    call_connecting_timeout_seconds: int = Field(default=600, ge=30)
+    # CONNECTED/ACTIVE with no media frame or provider event for this long is ended.
+    call_inactivity_timeout_minutes: int = Field(default=30, ge=1)
+    # Hard ceiling for any call.
+    call_max_duration_hours: int = Field(default=8, ge=1)
     # Mock-telephony conversation simulator (demo/testing). Only works with TELEPHONY_PROVIDER=mock.
     simulation_enabled: bool = True
     simulation_utterance_delay_seconds: float = Field(default=2.0, ge=0, le=30)

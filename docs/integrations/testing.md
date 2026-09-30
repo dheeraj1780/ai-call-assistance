@@ -106,7 +106,7 @@ cd frontend && npm test && npm run typecheck && npm run lint && npm run build
    1. On the contact, click Teams Call and paste any `https://teams.microsoft.com/l/meetup-join/...` link.
    2. Continue to the agenda, then open the live screen.
    3. Click Start, then **Simulate conversation (mock)**.
-   4. Transient mode shows everything live and stores nothing.
+   4. Live-only (transient) mode shows everything live, keeps it in server memory during the call, and stores no transcript/notes afterwards. Audio is never stored in any mode.
 6. **Phone call:** use the same flow with Phone Call.
 
 ## Controlled real-provider tests (next step, one provider at a time)

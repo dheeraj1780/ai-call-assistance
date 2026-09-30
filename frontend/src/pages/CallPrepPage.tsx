@@ -3,9 +3,10 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import { AgendaEditor } from "../components/AgendaEditor";
+import { CallDetailsForm } from "../components/CallDetailsForm";
 import { Badge, Card, QueryState } from "../components/common";
 import { Alert, Button } from "../components/ui";
-import { formatDateTime, label } from "../lib/crm";
+import { CHANNEL_NAME, formatDateTime, label } from "../lib/crm";
 import { errorMessage } from "../lib/errors";
 import { draftKey, prepApi, type AgendaDraftItem, type AgendaSuggestion, type CallPrep } from "../lib/prep";
 
@@ -28,6 +29,7 @@ function PrepView({ prep }: { prep: CallPrep }) {
     prep.agenda.map((a) => ({ key: draftKey(), title: a.title, question: a.question ?? "", source: a.source })),
   );
   const [dirty, setDirty] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [suggestion, setSuggestion] = useState<AgendaSuggestion | null>(null);
 
   const save = useMutation({
@@ -73,7 +75,7 @@ function PrepView({ prep }: { prep: CallPrep }) {
             Call record
           </Button>
           <Button
-            disabled={dirty || !editable}
+            disabled={dirty || editing || !editable}
             title={dirty ? "Save the agenda first" : undefined}
             onClick={() => navigate(`/calls/${callId}/live`)}
           >
@@ -84,11 +86,36 @@ function PrepView({ prep }: { prep: CallPrep }) {
 
       <div className="grid gap-4 lg:grid-cols-5">
         <div className="space-y-4 lg:col-span-3">
-          <Card title="Objective">
-            <p className="text-sm text-slate-900">{prep.call.objective || "No objective set."}</p>
-            {prep.call.desired_outcome ? (
-              <p className="mt-1 text-sm text-slate-600">Desired outcome: {prep.call.desired_outcome}</p>
-            ) : null}
+          <Card
+            title="Call details"
+            actions={
+              editable && !editing ? (
+                <Button variant="secondary" onClick={() => setEditing(true)}>
+                  Edit
+                </Button>
+              ) : null
+            }
+          >
+            {editing ? (
+              <CallDetailsForm call={prep.call} onSaved={() => setEditing(false)} onCancel={() => setEditing(false)} />
+            ) : (
+              <div className="space-y-1 text-sm">
+                <p className="text-slate-900">{prep.call.objective || "No objective set."}</p>
+                {prep.call.desired_outcome ? (
+                  <p className="text-slate-600">Desired outcome: {prep.call.desired_outcome}</p>
+                ) : null}
+                <p className="text-slate-600">
+                  Channel: {CHANNEL_NAME[prep.call.channel ?? "PHONE"]}
+                  {prep.call.language ? ` · Language: ${prep.call.language}` : ""}
+                </p>
+                {prep.call.meeting_url ? (
+                  <p className="break-all text-slate-600">Meeting link: {prep.call.meeting_url}</p>
+                ) : null}
+                {!editable ? (
+                  <p className="text-xs text-slate-500">Details are fixed once the call has started.</p>
+                ) : null}
+              </div>
+            )}
           </Card>
 
           <Card

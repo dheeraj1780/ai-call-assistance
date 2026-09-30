@@ -5,7 +5,11 @@ OWNER/ADMIN, the call's assigned user, or an unassigned call.
 
 Rules:
 - Status changes must follow ``CALL_TRANSITIONS``; timestamps are set by the server.
-- ``objective``/``scheduled_at`` can only change while the call is PLANNED.
+- Planning fields (objective, desired outcome, schedule, meeting link, language) can only change
+  while the call is PLANNED; the meeting link is re-validated for the call's channel. Once the
+  call has been started, the target, channel, provider and language are fixed.
+- Calls placed through a provider are ended with ``POST /calls/{id}/end`` (which also hangs up
+  and cleans up); their status is never set by hand.
 - ``outcome`` can only be set on a COMPLETED call.
 """
 
@@ -21,7 +25,9 @@ from app.auth.dependencies import Principal
 from app.calls.models import CALL_TRANSITIONS, Call, CallChannel, CallStatus
 from app.calls.repository import CallRepository
 from app.calls.schemas import CallCreate, CallUpdate
+from app.calls.targets import TargetError, normalize_target
 from app.common.errors import (
+    AppError,
     ForbiddenError,
     InvalidReferenceError,
     InvalidStateError,
@@ -32,7 +38,7 @@ from app.tenants.membership import ensure_member
 from app.timeline import service as timeline
 from app.timeline.models import TimelineCategory, TimelineEventType
 
-_PLANNING_FIELDS = {"objective", "desired_outcome", "scheduled_at"}
+_PLANNING_FIELDS = {"objective", "desired_outcome", "scheduled_at", "meeting_url", "language"}
 _NON_NULLABLE = {"status"}
 
 
@@ -136,11 +142,29 @@ async def update_call(
     }
     old_status = call.status
 
+    if "status" in changes and call.provider is not None:
+        raise InvalidStateError(
+            "This call was placed through a calling provider: use End call instead",
+            code="use_end_call",
+        )
     if "status" in changes:
         _apply_status(call, changes.pop("status"), datetime.now(UTC))
 
     if _PLANNING_FIELDS & changes.keys() and call.status != CallStatus.PLANNED:
-        raise InvalidStateError("Objective and schedule can only change while the call is planned")
+        raise InvalidStateError(
+            "Objective, schedule, meeting link and language can only change while the call is "
+            "planned",
+            code="call_already_started",
+        )
+    if "meeting_url" in changes:
+        try:
+            changes["meeting_url"] = normalize_target(
+                CallChannel(call.channel), changes["meeting_url"]
+            )
+        except TargetError as exc:
+            raise AppError(
+                str(exc), code="invalid_meeting_url", details=[{"field": "meeting_url"}]
+            ).with_status(422) from None
     if changes.get("outcome") is not None and call.status != CallStatus.COMPLETED:
         raise InvalidStateError("An outcome can only be recorded for a completed call")
     if "user_id" in changes:

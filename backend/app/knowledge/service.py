@@ -70,6 +70,13 @@ async def upload(
         raise UploadRejectedError(str(exc), code=exc.code) from None
 
     digest = hashlib.sha256(data).hexdigest()
+    # Two concurrent uploads of the same file must not both pass the duplicate check: serialise
+    # per (company, checksum) for the rest of this transaction.
+    await session.execute(
+        select(
+            func.pg_advisory_xact_lock(func.hashtextextended(f"{principal.company_id}:{digest}", 0))
+        )
+    )
     existing = await session.scalar(
         select(KnowledgeDocument).where(
             KnowledgeDocument.company_id == principal.company_id,

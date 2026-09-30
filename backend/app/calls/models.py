@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -31,6 +32,9 @@ class CallStatus(enum.StrEnum):
     RINGING = "RINGING"
     CONNECTED = "CONNECTED"
     ACTIVE = "ACTIVE"
+    # End requested: waiting (bounded) for the provider to confirm; forced to a terminal state
+    # locally if it never does (see telephony.service.request_end / recovery).
+    ENDING = "ENDING"
     # Terminal
     COMPLETED = "COMPLETED"
     NO_ANSWER = "NO_ANSWER"
@@ -42,7 +46,13 @@ TERMINAL_CALL_STATUSES = frozenset(
     {CallStatus.COMPLETED, CallStatus.NO_ANSWER, CallStatus.CANCELLED, CallStatus.FAILED}
 )
 LIVE_CALL_STATUSES = frozenset(
-    {CallStatus.INITIATED, CallStatus.RINGING, CallStatus.CONNECTED, CallStatus.ACTIVE}
+    {
+        CallStatus.INITIATED,
+        CallStatus.RINGING,
+        CallStatus.CONNECTED,
+        CallStatus.ACTIVE,
+        CallStatus.ENDING,
+    }
 )
 
 
@@ -58,11 +68,19 @@ MEETING_CHANNELS = frozenset({CallChannel.TEAMS, CallChannel.GOOGLE_MEET})
 
 
 class TranscriptPersistence(enum.StrEnum):
-    """Whether media-derived data (transcript, AI notes/insights) may be stored for a call.
+    """Whether TEXT derived from the call (transcript, AI notes/insights, summary) is stored.
 
-    PERSISTED: stored with retention (phone calls). TRANSIENT: processed in memory only.
-    PENDING_RECORDING_STATUS: a Teams call whose persistence depends on Microsoft's
-    updateRecordingStatus succeeding first; treated as TRANSIENT until confirmed.
+    RAW AUDIO IS NEVER STORED, whatever this says: audio is processed in memory and discarded.
+    This flag only controls derived text, which follows the company's retention policy.
+
+    PERSISTED: text stored with retention (the default for every channel).
+    TRANSIENT: "live-only": derived text is shown live and kept in server memory for the
+    duration of the call, but not written to the database. Used where a provider's terms
+    forbid persisting media-derived data (Microsoft Teams without a confirmed recording
+    declaration) or where a company chose it. The call record, status, outcome, action items
+    and manual notes are still kept.
+    PENDING_RECORDING_STATUS: a Teams call that asked to keep text: behaves as TRANSIENT until
+    Microsoft's updateRecordingStatus succeeded (then PERSISTED).
     """
 
     PERSISTED = "PERSISTED"
@@ -90,6 +108,7 @@ CALL_TRANSITIONS: dict[CallStatus, frozenset[CallStatus]] = {
     CallStatus.INITIATED: frozenset({CallStatus.CANCELLED}),
     CallStatus.RINGING: frozenset({CallStatus.CANCELLED}),
     CallStatus.CONNECTED: frozenset(),
+    CallStatus.ENDING: frozenset(),
     CallStatus.COMPLETED: frozenset(),
     CallStatus.NO_ANSWER: frozenset(),
     CallStatus.CANCELLED: frozenset(),
@@ -146,6 +165,15 @@ class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
         Index("ix_calls_company_id_contact_id", "company_id", "contact_id", "created_at"),
         Index("ix_calls_company_id_status", "company_id", "status"),
         Index("ix_calls_company_id_user_id", "company_id", "user_id"),
+        # Recovery sweep: live calls by activity (partial: tiny, only in-flight calls).
+        Index(
+            "ix_calls_live_recovery",
+            "status",
+            "updated_at",
+            postgresql_where=text(
+                "status IN ('INITIATED', 'RINGING', 'CONNECTED', 'ACTIVE', 'ENDING')"
+            ),
+        ),
     )
 
     contact_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
@@ -180,6 +208,13 @@ class Call(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
     meeting_url: Mapped[str | None] = mapped_column(String(2000))
     # Speech recognition language for this call (explicit; no automatic detection).
     language: Mapped[str | None] = mapped_column(String(8))
+    # When the user asked to end the call (ENDING); drives the bounded wait and forced end.
+    end_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Last sign of life (media frame / provider event), throttled; used to detect stuck calls.
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set once end-of-call processing (drain + post-call enqueue) completed; NULL on a terminal
+    # call means it must be re-run (e.g. the server restarted mid-finalisation).
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     transcript_persistence: Mapped[str] = mapped_column(
         String(32),
         nullable=False,

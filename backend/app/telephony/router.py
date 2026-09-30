@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import uuid
 from typing import Annotated, Literal
@@ -21,6 +22,7 @@ from app.integrations.domain import Provider
 from app.telephony import service, simulator
 from app.telephony.models import CallRoute
 from app.telephony.provider import (
+    CONNECT_GATED,
     WebhookVerificationError,
     get_telephony_provider,
     media_parser_for,
@@ -62,7 +64,23 @@ async def end_call(
     principal: Principal = Depends(get_principal),
     session: AsyncSession = Depends(get_db_session),
 ) -> CallOut:
+    """End a call (any provider). Idempotent and bounded: the call becomes ENDING, the provider
+    is asked to hang up, and if it does not confirm within CALL_END_GRACE_SECONDS the call is
+    completed locally. Repeating the request returns the current state."""
     return CallOut.model_validate(await service.request_end(session, principal, call_id))
+
+
+@router.post("/calls/{call_id}/reopen", response_model=CallOut)
+async def reopen_call(
+    call_id: uuid.UUID,
+    request: Request,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_db_session),
+) -> CallOut:
+    """Make a call that never connected (failed to start, cancelled, no answer) PLANNED again so
+    its details can be corrected (PATCH /calls/{id}) and it can be started again."""
+    call = await service.reopen_call(session, principal, call_id, ip=client_ip(request))
+    return CallOut.model_validate(call)
 
 
 class ScriptLine(BaseModel):
@@ -183,7 +201,7 @@ async def _connect_for_dev_audio(
             await handle_gateway_event(
                 "teams-mock",
                 GatewayEvent(
-                    event_id=f"dev-audio-{call_id}-{next(iter(kw.values()))}",
+                    event_id=f"dev-audio-{call_id}-{provider_call_id}-{next(iter(kw.values()))}",
                     call_id=call_id,
                     gateway_call_id=provider_call_id,
                     **kw,
@@ -196,7 +214,10 @@ async def _connect_for_dev_audio(
         await service.process_event(
             provider,
             TelephonyEvent(
-                f"dev-audio-{call_id}-{state}", provider_call_id, state, datetime.now(UTC)
+                f"dev-audio-{call_id}-{provider_call_id}-{state}",
+                provider_call_id,
+                state,
+                datetime.now(UTC),
             ),
         )
 
@@ -238,7 +259,7 @@ async def media_stream(websocket: WebSocket, provider_name: str, call_id: uuid.U
     await websocket.accept()
     # Plivo inbound calls: the first (A) leg is the customer, so tracks are swapped.
     parse = media_parser_for(provider_name, a_leg=websocket.query_params.get("leg", "agent"))
-    ingest = service.MediaIngest(call_id)
+    ingest = service.MediaIngest(call_id, require_connected=provider_name in CONNECT_GATED)
     try:
         while True:
             message = await websocket.receive_text()
@@ -247,3 +268,7 @@ async def media_stream(websocket: WebSocket, provider_name: str, call_id: uuid.U
             await ingest.handle(parse(message))
     except WebSocketDisconnect:
         pass  # the phone call is unaffected; the provider may reconnect
+    except service.MediaStreamEnded:
+        # The call is ending/over: stop accepting audio and release the provider's stream.
+        with contextlib.suppress(Exception):
+            await websocket.close(code=1000)

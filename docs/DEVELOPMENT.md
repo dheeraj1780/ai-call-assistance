@@ -83,7 +83,7 @@ npm test && npm run lint && npm run typecheck && npm run build
 
 Real providers: set `AI_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`, `EMBEDDING_PROVIDER=voyage` +
 `VOYAGE_API_KEY`, `CALENDAR_PROVIDER=google` + Google OAuth client (redirect URI
-`{PUBLIC_BASE_URL}/api/v1/calendar/oauth/callback`). Telephony/STT have no real adapter yet.
+`{PUBLIC_BASE_URL}/api/v1/calendar/oauth/callback`). Real adapters: Plivo (phone), Teams gateway, Google Meet bridge, Google STT (see docs/integrations/).
 
 Tests: `uv run pytest` (needs `TEST_DATABASE_URL`), DB-free subset:
 `uv run pytest --noconftest tests/unit`.

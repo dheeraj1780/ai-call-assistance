@@ -583,3 +583,65 @@ async def review_draft(
     await session.commit()
     await session.refresh(draft)
     return draft
+
+
+async def edit_summary(
+    session: AsyncSession,
+    principal: Principal,
+    call_id: uuid.UUID,
+    changes: dict[str, str | None],
+    *,
+    ip: str | None = None,
+) -> CallSummary:
+    """A person corrects or writes the post-call summary. The AI wording is kept once
+    (``original_summary``); edited scalar fields become EDITED and are never overwritten by AI
+    reprocessing. ``changes`` holds only the fields the user sent."""
+    from app.audit import service as audit
+
+    call = await get_call(session, principal, call_id)
+    _require_editor(principal, call)
+    summary = await session.scalar(
+        select(CallSummary)
+        .where(CallSummary.company_id == principal.company_id, CallSummary.call_id == call.id)
+        .with_for_update()
+    )
+    if summary is None or summary.status == SummaryStatus.PENDING:
+        raise InvalidStateError("The summary is not ready yet")
+    if "suggested_outcome" in changes:
+        value = changes["suggested_outcome"]
+        if value is not None and value not in {o.value for o in CallOutcome}:
+            raise InvalidStateError("Unknown outcome", code="invalid_outcome")
+        summary.suggested_outcome = value
+    if "summary" in changes:
+        new_text = (changes["summary"] or "").strip() or None
+        if new_text != summary.summary:
+            if summary.original_summary is None and summary.edited_at is None:
+                summary.original_summary = summary.summary
+            summary.summary = new_text
+        if summary.status == SummaryStatus.FAILED:
+            summary.status = SummaryStatus.READY.value  # a person wrote it: nothing to retry
+            summary.error_code = None
+    for name in SCALAR_FIELDS:
+        if name in changes:
+            value = (changes[name] or "").strip() or None
+            setattr(summary, name, value[:500] if value else None)
+            setattr(
+                summary,
+                f"{name}_status",
+                FieldStatus.EDITED.value if value else FieldStatus.NOT_DISCUSSED.value,
+            )
+    summary.edited_at = datetime.now(UTC)
+    summary.edited_by_user_id = principal.user_id
+    audit.record(
+        session,
+        "summary.edited",
+        company_id=principal.company_id,
+        actor_user_id=principal.user_id,
+        entity_type="call_summary",
+        entity_id=summary.id,
+        ip=ip,
+        details={"fields": sorted(changes)},
+    )
+    await session.commit()
+    await session.refresh(summary)
+    return summary

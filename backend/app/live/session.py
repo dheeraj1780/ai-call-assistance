@@ -42,6 +42,7 @@ TRACK_SPEAKER: dict[Track, tuple[Speaker, float | None]] = {
     Track.MIXED: (Speaker.UNKNOWN, None),
 }
 MAX_STT_REOPENS = 3
+TRANSIENT_MAX_SEGMENTS = 5000
 REOPEN_BACKOFF_S = 2.0
 
 
@@ -78,6 +79,9 @@ class LiveSession:
     frames_received: int = 0
     _idle_watch: asyncio.Task[None] | None = None
     idle_finalized: int = 0
+    # Live-only (TRANSIENT) calls: the transcript is kept here, in server memory, for the duration
+    # of the call so a refreshed/reconnected browser can resume. Never written to the database.
+    transient_transcript: list[dict[str, object]] = field(default_factory=list)
 
     @classmethod
     async def open(
@@ -145,6 +149,12 @@ class LiveSession:
         except (STTError, Exception):
             logger.warning("stt_send_failed", extra={"call_id": str(self.call_id)})
             await self._stt_failed(track, ts)
+
+    def find_transient_segment(self, segment_id: str) -> dict[str, object] | None:
+        for payload in self.transient_transcript:
+            if payload["id"] == segment_id:
+                return payload
+        return None
 
     @property
     def _bytes_per_ms(self) -> float:
@@ -291,7 +301,11 @@ class LiveSession:
                     await set_tenant_context(session, TenantContext(company_id=self.company_id))
                     session.add(segment)
                     await session.commit()
-        hub.publish(self.call_id, "transcript.final", segment_payload(segment))
+        payload = segment_payload(segment)
+        if not self.persist:
+            self.transient_transcript.append(payload)
+            del self.transient_transcript[:-TRANSIENT_MAX_SEGMENTS]
+        hub.publish(self.call_id, "transcript.final", payload)
         processing_started = time.monotonic()
         await self.engine.on_segment(SegmentView(segment.id, seq, speaker, segment.text))
         logger.info(
@@ -374,6 +388,9 @@ def segment_payload(s: TranscriptSegment) -> dict[str, object]:
         "stt_confidence": s.stt_confidence,
         "source": s.source,
         "is_final": True,
+        # Provenance of human corrections: ``text`` is current; ``original_text`` the STT output.
+        "edited": s.edited_at is not None,
+        "original_text": s.original_text,
     }
 
 
@@ -387,6 +404,11 @@ def set_media_status(call_id: uuid.UUID, state: str, reason: str | None = None) 
     snapshot. Unavailable media never ends the call."""
     _media_status[call_id] = {"state": state, "reason": reason}
     hub.publish(call_id, "media.status", {"state": state, "reason": reason})
+
+
+def clear_media_status(call_id: uuid.UUID) -> None:
+    """Forget the media state of a previous attempt (a re-opened call starts clean)."""
+    _media_status.pop(call_id, None)
 
 
 def media_status(call_id: uuid.UUID) -> dict[str, str | None] | None:

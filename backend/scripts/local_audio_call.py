@@ -263,7 +263,7 @@ async def setup_call(api: httpx.AsyncClient, language: str) -> str:
             "contact_id": contact["id"],
             "channel": "TEAMS",
             "language": language,
-            "meeting_url": "https://teams.microsoft.com/l/meetup-join/19%3alocal_audio_test%40thread.v2/0?context=%7b%7d",
+            "meeting_url": "https://teams.microsoft.com/l/meetup-join/19%3alocal_audio_test%40thread.v2/0?context=%7b%22Tid%22%3a%2200000000-0000-0000-0000-000000000001%22%2c%22Oid%22%3a%2200000000-0000-0000-0000-000000000002%22%7d",
             "objective": "Qualify inventory management needs",
         },
     )

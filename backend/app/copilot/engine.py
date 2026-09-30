@@ -13,9 +13,10 @@ Pipeline for every FINAL transcript segment (partials are ignored):
 Every failure is caught: the copilot degrades to "unavailable" but the call, the transcript
 and the media pipeline continue.
 
-TRANSIENT mode (``persist=False``, e.g. Teams calls without declared recording): the same
-analysis runs, but notes, cards and agenda changes are only published to the live screen and
-never written to the database.
+LIVE-ONLY mode (``persist=False``, e.g. Teams calls without a confirmed recording declaration):
+the same analysis runs, but notes, cards and agenda changes are published to the live screen and
+kept in this engine's memory for the call's duration (so a reconnecting screen can resume and a
+person can review them) - never written to the database. Raw audio is never stored in any mode.
 """
 
 import asyncio
@@ -24,6 +25,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
@@ -81,8 +83,10 @@ AGENDA_AI_MIN_CONFIDENCE = 0.7
 
 def may_be_customer(speaker: str) -> bool:
     """Mixed audio without speaker attribution (Google Meet, Teams without the salesperson's
-    account) is UNKNOWN: it may be the customer, so customer-side extraction runs on it. The
-    resulting notes stay SUGGESTED until a person reviews them."""
+    account) is UNKNOWN: it may be the customer, so customer-side extraction, agenda answers and
+    company-knowledge lookup run on it. Nothing pretends to know who spoke: the resulting notes
+    stay SUGGESTED until a person reviews them and cards say "possible" for unattributed
+    speech."""
     return speaker in (Speaker.CUSTOMER, Speaker.UNKNOWN)
 
 
@@ -129,7 +133,6 @@ class CopilotDelta(BaseModel):
     notes: Annotated[list[ExtractedNote], Field(max_length=10)] = []
     agenda_updates: Annotated[list[AgendaUpdate], Field(max_length=15)] = []
     suggested_question: Annotated[str, Field(max_length=300)] | None = None
-    objective_satisfied: bool | None = None
 
 
 class CopilotContext(BaseModel):
@@ -190,6 +193,11 @@ class CopilotEngine:
     persist: bool = True
     processing: bool = False
     _transient_keys: set[str] = field(default_factory=set)
+    # Live-only calls keep their notes/cards in server memory for the duration of the call, so a
+    # browser refresh or reconnect still shows them (nothing is written to the database).
+    transient_notes: dict[str, dict[str, object]] = field(default_factory=dict)
+    transient_insights: dict[str, dict[str, object]] = field(default_factory=dict)
+    transient_agenda: dict[str, dict[str, object]] = field(default_factory=dict)
     # kind:normalised-text of every note already shown, whichever pass produced it.
     _note_texts: set[str] = field(default_factory=set)
     # Note kinds extracted since the agenda was last updated (an extracted fact answers a topic).
@@ -236,7 +244,7 @@ class CopilotEngine:
         try:
             await self._deterministic(seg)
             await self._track_agenda(seg)
-            if seg.speaker == Speaker.CUSTOMER and is_question(seg.text):
+            if may_be_customer(seg.speaker) and is_question(seg.text):
                 await self._knowledge_lookup(seg)
             if len(self.segments) % MISSING_CHECK_EVERY == 0:
                 await self._missing_agenda(seg)
@@ -408,17 +416,15 @@ class CopilotEngine:
     ) -> None:
         if not self.persist:
             for state, status, reason, confidence in changes:
-                hub.publish(
-                    self.call_id,
-                    "agenda.updated",
-                    {
-                        "id": str(state.id),
-                        "status": status.value,
-                        "status_source": source.value,
-                        "status_confidence": confidence,
-                        "status_reason": reason,
-                    },
-                )
+                payload: dict[str, object] = {
+                    "id": str(state.id),
+                    "status": status.value,
+                    "status_source": source.value,
+                    "status_confidence": confidence,
+                    "status_reason": reason,
+                }
+                self.transient_agenda[str(state.id)] = payload
+                hub.publish(self.call_id, "agenda.updated", payload)
             return
         async with get_session_factory()() as session:
             await set_tenant_context(session, TenantContext(company_id=self.company_id))
@@ -502,7 +508,8 @@ class CopilotEngine:
                     source=IntelSource.KNOWLEDGE,
                     dedupe_key=key,
                     confidence=round(best.score, 3),
-                    context=f"Company knowledge: {best.title}",
+                    context=f"Company knowledge: {best.title}"
+                    + (" (possible customer question)" if seg.speaker == Speaker.UNKNOWN else ""),
                     segment_id=seg.id,
                 )
             else:
@@ -669,45 +676,77 @@ class CopilotEngine:
         if dedupe_key in self._transient_keys:
             return
         self._transient_keys.add(dedupe_key)
-        hub.publish(
-            self.call_id,
-            "insight.created",
-            {
-                "id": str(uuid.uuid4()),
-                "type": type_.value,
-                "priority": priority.value,
-                "content": content[:1000],
-                "context": context[:500] if context else None,
-                "confidence": confidence,
-                "source": source.value,
-                "status": "ACTIVE",
-                "source_segment_id": None,
-                "created_at": None,
-                "transient": True,
-            },
-        )
+        payload: dict[str, object] = {
+            "id": str(uuid.uuid4()),
+            "type": type_.value,
+            "priority": priority.value,
+            "content": content[:1000],
+            "context": context[:500] if context else None,
+            "confidence": confidence,
+            "source": source.value,
+            "status": "ACTIVE",
+            "source_segment_id": None,
+            "created_at": datetime.now(UTC).isoformat(),
+            "transient": True,
+        }
+        self.transient_insights[str(payload["id"])] = payload
+        hub.publish(self.call_id, "insight.created", payload)
 
     def _transient_note(self, d: Detection, key: str, source: IntelSource) -> bool:
         if f"note:{key}" in self._transient_keys:
             return False
         self._transient_keys.add(f"note:{key}")
-        hub.publish(
-            self.call_id,
-            "note.upserted",
-            {
-                "id": str(uuid.uuid4()),
-                "kind": d.kind.value,
-                "category": d.category.value if d.category else None,
-                "text": d.text[:1000],
-                "confidence": d.confidence,
-                "source": source.value,
-                "status": "SUGGESTED",
-                "source_segment_id": None,
-                "created_at": None,
-                "updated_at": None,
-                "transient": True,
-            },
-        )
+        now = datetime.now(UTC).isoformat()
+        payload: dict[str, object] = {
+            "id": str(uuid.uuid4()),
+            "kind": d.kind.value,
+            "category": d.category.value if d.category else None,
+            "text": d.text[:1000],
+            "confidence": d.confidence,
+            "source": source.value,
+            "status": "SUGGESTED",
+            "source_segment_id": None,
+            "created_at": now,
+            "updated_at": now,
+            "transient": True,
+        }
+        self.transient_notes[str(payload["id"])] = payload
+        hub.publish(self.call_id, "note.upserted", payload)
+        return True
+
+    # -- live-only (in-memory) review: same user actions as stored notes ---------------------
+
+    def edit_transient_note(
+        self, note_id: str, *, text: str | None, kind: str | None, status: str | None
+    ) -> dict[str, object] | None:
+        note = self.transient_notes.get(note_id)
+        if note is None:
+            return None
+        if text is not None and text != note["text"]:
+            note["text"] = text
+            note["status"] = "EDITED"
+        if kind is not None:
+            note["kind"] = kind
+        if status is not None:
+            note["status"] = status
+        elif text is None and note["status"] == "SUGGESTED":
+            note["status"] = "CONFIRMED"
+        note["updated_at"] = datetime.now(UTC).isoformat()
+        hub.publish(self.call_id, "note.upserted", note)
+        return note
+
+    def delete_transient_note(self, note_id: str) -> bool:
+        if self.transient_notes.pop(note_id, None) is None:
+            return False
+        hub.publish(self.call_id, "note.deleted", {"id": note_id})
+        return True
+
+    def dismiss_transient_insight(self, insight_id: str) -> bool:
+        card = self.transient_insights.get(insight_id)
+        if card is None:
+            return False
+        card["status"] = "DISMISSED"
+        hub.publish(self.call_id, "insight.dismissed", {"id": insight_id})
         return True
 
     def _set_degraded(self, reason: str) -> None:

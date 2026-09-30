@@ -10,6 +10,11 @@ vi.mock("../lib/prep", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/prep")>();
   return { ...actual, prepApi: mocks };
 });
+const crmMocks = vi.hoisted(() => ({ updateCall: vi.fn() }));
+vi.mock("../lib/crm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/crm")>();
+  return { ...actual, crm: { ...actual.crm, updateCall: crmMocks.updateCall } };
+});
 const { CallPrepPage } = await import("./CallPrepPage");
 
 const auth = fakeAuth({ status: "authenticated", session: TEST_SESSION });
@@ -99,5 +104,32 @@ describe("CallPrepPage", () => {
       ["Current process", "AI"],
       ["Budget range", "AI_EDITED"],
     ]);
+  });
+
+  it("edits a planned Teams call's meeting link and language before start", async () => {
+    const teams = { ...prep, call: { ...prep.call, channel: "TEAMS" as const, meeting_url: "https://teams.microsoft.com/l/meetup-join/old", language: "en-IN" } };
+    mocks.prep.mockResolvedValue(teams);
+    crmMocks.updateCall.mockResolvedValue(teams.call);
+    renderWithAuth(<CallPrepPage />, { auth, path: "/calls/:id/prepare", url: "/calls/c1/prepare" });
+    await userEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("button", { name: "Start call" })).toBeDisabled();
+    const link = screen.getByLabelText(/Teams meeting link/);
+    await userEvent.clear(link);
+    await userEvent.type(link, "https://teams.microsoft.com/l/meetup-join/new");
+    await userEvent.selectOptions(screen.getByLabelText(/Conversation language/), "hi-IN");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(crmMocks.updateCall).toHaveBeenCalledWith(
+        "c1",
+        expect.objectContaining({ meeting_url: "https://teams.microsoft.com/l/meetup-join/new", language: "hi-IN" }),
+      ),
+    );
+  });
+
+  it("does not offer Edit once the call has started", async () => {
+    mocks.prep.mockResolvedValue({ ...prep, call: { ...prep.call, status: "ACTIVE" } });
+    renderWithAuth(<CallPrepPage />, { auth, path: "/calls/:id/prepare", url: "/calls/c1/prepare" });
+    expect(await screen.findByText("Details are fixed once the call has started.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
   });
 });

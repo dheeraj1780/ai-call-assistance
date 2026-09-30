@@ -1,7 +1,7 @@
 import { apiFetch } from "./api";
 import type { Call } from "./crm";
 
-export type FieldStatus = "CONFIRMED" | "INFERRED" | "NOT_DISCUSSED";
+export type FieldStatus = "CONFIRMED" | "INFERRED" | "NOT_DISCUSSED" | "EDITED";
 
 export interface GroundedField {
   value: string | null;
@@ -20,7 +20,13 @@ export interface CallSummary {
   decision_maker: GroundedField;
   next_step: GroundedField;
   generated_at: string | null;
+  /** Set when a person edited the AI output. */
+  edited_at?: string | null;
 }
+
+export type SummaryEdit = Partial<
+  Record<"summary" | "suggested_outcome" | "current_solution" | "budget" | "timeline" | "decision_maker" | "next_step", string | null>
+>;
 
 export interface FollowUpDraft {
   id: string;
@@ -43,6 +49,8 @@ export interface PostCall {
 export const postCallApi = {
   get: (callId: string) => apiFetch<PostCall>(`/api/v1/calls/${callId}/post-call`),
   retry: (callId: string) => apiFetch<void>(`/api/v1/calls/${callId}/post-call/retry`, { method: "POST" }),
+  editSummary: (callId: string, body: SummaryEdit) =>
+    apiFetch<CallSummary>(`/api/v1/calls/${callId}/post-call/summary`, { method: "PATCH", body }),
   reviewDraft: (
     callId: string,
     draftId: string,

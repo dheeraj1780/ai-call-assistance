@@ -2,7 +2,13 @@
 
 IMPLEMENTED against Plivo's Voice API (REST + XML + audio streams):
 - create call:  POST {api}/v1/Account/{auth_id}/Call/   (Plivo rings the salesperson first)
-- answer XML:   <Stream> (both tracks, unidirectional, mu-law 8 kHz) + <Dial> to the customer
+- answer XML:   <Dial> to the customer (callbackUrl reports the customer's answer)
+- audio:        Audio Streams REST API, started ONLY once the customer answered:
+                POST {api}/v1/Account/{auth_id}/Call/{call_uuid}/Stream/ (both tracks,
+                unidirectional, mu-law 8 kHz). Not <Stream> in the answer XML: Plivo's documented
+                keepCallAlive semantics make a <Stream> element run exclusively until the stream
+                disconnects (blocking the <Dial> that follows), and an XML stream would also start
+                while the customer is still ringing (ringback would be transcribed).
 - hang up:      DELETE {api}/v1/Account/{auth_id}/Call/{call_uuid}/  (or /Request/{uuid}/)
 - test:         GET {api}/v1/Account/{auth_id}/  and  GET .../Number/{number}/
 - signatures:   X-Plivo-Signature-V3 / -Nonce, ported from the official plivo-python SDK
@@ -11,7 +17,10 @@ MOCK VERIFIED only. EXTERNAL PROVIDER VERIFICATION REQUIRED (real account, publi
 paid call is ever placed by tests or by this code without an explicit user action.
 
 The AI never speaks: the stream is unidirectional (listen-only) and nothing is played to the
-caller. Raw audio is passed to STT and dropped (app/live/session.py).
+caller. NO Plivo recording is used (no <Record>, no recording API); raw audio is passed to STT and
+dropped (app/live/session.py). Verified against Plivo's public documentation (Stream XML and Audio
+Streams API, Dial callback parameters, stream WebSocket protocol) on 2026-09-30; REAL ACCOUNT
+VERIFICATION still required.
 """
 
 import base64
@@ -132,33 +141,20 @@ def answer_xml(
     *,
     customer_number: str,
     caller_id: str,
-    stream_url: str | None,
-    stream_status_url: str,
     dial_action_url: str,
     dial_callback_url: str,
 ) -> str:
-    """Bridge the answered salesperson leg to the customer, optionally forking audio.
+    """Bridge the answered leg to the other party. The audio stream is NOT part of this XML: it is
+    started through the Audio Streams API once the dial callback reports the answer.
 
     On the salesperson (A) leg, the ``inbound`` track is the salesperson and the ``outbound``
-    track is what they hear - the customer. ``keepCallAlive="false"`` lets Plivo continue with
-    <Dial> while the stream runs.
-    """
-    stream = ""
-    if stream_url:
-        stream = (
-            "<Stream "
-            'bidirectional="false" audioTrack="both" streamTimeout="14400" '
-            'keepCallAlive="false" contentType="audio/x-mulaw;rate=8000" '
-            f"statusCallbackUrl={quoteattr(stream_status_url)} "
-            'statusCallbackMethod="POST">'
-            f"{escape(stream_url)}</Stream>"
-        )
+    track is what they hear - the customer."""
     dial = (
         f"<Dial callerId={quoteattr(caller_id)} action={quoteattr(dial_action_url)} "
         f'method="POST" callbackUrl={quoteattr(dial_callback_url)} callbackMethod="POST">'
         f"<Number>{escape(customer_number)}</Number></Dial>"
     )
-    return f'<?xml version="1.0" encoding="UTF-8"?><Response>{stream}{dial}</Response>'
+    return f'<?xml version="1.0" encoding="UTF-8"?><Response>{dial}</Response>'
 
 
 def hangup_xml() -> str:
@@ -201,7 +197,8 @@ def _first(params: Mapping[str, list[str] | str], key: str) -> str:
 
 
 def parse_callback(kind: str, params: Mapping[str, list[str] | str]) -> PlivoCallback:
-    call_uuid = _first(params, "CallUUID")[:128]
+    # Dial callbacks identify the salesperson's leg as DialALegUUID (CallUUID may be absent).
+    call_uuid = (_first(params, "CallUUID") or _first(params, "DialALegUUID"))[:128]
     if not call_uuid:
         raise WebhookRejectedError("missing CallUUID")
     status = _first(params, "CallStatus").lower()
@@ -360,7 +357,10 @@ class PlivoTelephonyProvider:
             raise_for_status(resp, provider=NAME)
             request_uuid = resp.json().get("request_uuid")
         except (ProviderError, ValueError) as exc:
-            raise TelephonyError(f"plivo create_call failed: {type(exc).__name__}") from exc
+            raise TelephonyError(
+                f"plivo create_call failed: {type(exc).__name__}",
+                code=f"plivo_{getattr(exc, 'code', type(exc).__name__)}",
+            ) from exc
         if isinstance(request_uuid, list):
             request_uuid = request_uuid[0] if request_uuid else None
         if not request_uuid:
@@ -389,7 +389,39 @@ class PlivoTelephonyProvider:
                 if resp.status_code != 404:
                     raise_for_status(resp, provider=NAME)
         except ProviderError as exc:
-            raise TelephonyError(f"plivo end_call failed: {exc.code}") from exc
+            raise TelephonyError(
+                f"plivo end_call failed: {exc.code}", code=f"plivo_{exc.code}"
+            ) from exc
+
+    async def start_stream(
+        self, call_uuid: str, *, service_url: str, status_callback_url: str
+    ) -> None:
+        """Fork both tracks of the live call to our media WebSocket (listen-only, mu-law 8 kHz).
+        Called once the customer answered. Raises TelephonyError when Plivo refuses."""
+        body = {
+            "service_url": service_url,
+            "bidirectional": False,
+            "audio_track": "both",
+            "content_type": "audio/x-mulaw;rate=8000",
+            "stream_timeout": 4 * 3600,
+            "status_callback_url": status_callback_url,
+            "status_callback_method": "POST",
+        }
+        try:
+            async with self._http() as http:
+                resp = await request(
+                    http,
+                    "POST",
+                    f"{self._base}/Call/{call_uuid}/Stream/",
+                    provider=NAME,
+                    operation="start_stream",
+                    json=body,
+                )
+            raise_for_status(resp, provider=NAME)
+        except ProviderError as exc:
+            raise TelephonyError(
+                f"plivo start_stream failed: {exc.code}", code=f"plivo_stream_{exc.code}"
+            ) from exc
 
     # Webhooks for Plivo are handled by app/integrations/webhooks.py (per-integration
     # signature). The generic mock-style webhook entry points are not used.

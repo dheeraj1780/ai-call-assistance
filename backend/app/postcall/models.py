@@ -39,6 +39,8 @@ class FieldStatus(enum.StrEnum):
     CONFIRMED = "CONFIRMED"
     INFERRED = "INFERRED"
     NOT_DISCUSSED = "NOT_DISCUSSED"
+    # Written or corrected by a person (never overwritten by AI reprocessing).
+    EDITED = "EDITED"
 
 
 SCALAR_FIELDS = ("current_solution", "budget", "timeline", "decision_maker", "next_step")
@@ -59,6 +61,12 @@ class CallSummary(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
             ["calls.company_id", "calls.id"],
             ondelete="CASCADE",
             name="fk_call_summaries_call",
+        ),
+        ForeignKeyConstraint(
+            ["company_id", "edited_by_user_id"],
+            ["company_members.company_id", "company_members.user_id"],
+            ondelete="SET NULL (edited_by_user_id)",
+            name="fk_call_summaries_editor_member",
         ),
     )
 
@@ -89,6 +97,10 @@ class CallSummary(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
         String(16), nullable=False, default=FieldStatus.NOT_DISCUSSED
     )
     generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Human editing: the AI text is kept in ``original_summary`` on the first edit.
+    original_summary: Mapped[str | None] = mapped_column(Text)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    edited_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
 
 class DraftChannel(enum.StrEnum):

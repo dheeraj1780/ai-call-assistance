@@ -11,6 +11,7 @@ import json
 import uuid
 import xml.etree.ElementTree as ET
 
+import httpx
 import pytest
 
 from app.conversations.identity import normalize_email, normalize_phone, phone_variants
@@ -240,41 +241,61 @@ def test_plivo_verify_signature() -> None:
         plivo.verify_signature_v3("tok", uri=uri, method="POST", headers={}, params=params)
 
 
-def test_plivo_answer_xml_streams_both_tracks_listen_only() -> None:
+def test_plivo_answer_xml_bridges_without_an_xml_stream() -> None:
+    """Per Plivo's docs, <Stream keepCallAlive> makes the stream run exclusively and false ends
+    the call when streaming stops - neither fits "stream while bridged". The audio stream is
+    therefore started through the Audio Streams API after the customer answered, and the answer
+    XML only bridges. No <Record> ever (audio is never stored)."""
     xml = plivo.answer_xml(
         customer_number="+919876543210",
         caller_id="+918000000000",
-        stream_url="wss://cc.example.com/media?token=a&leg=agent",
-        stream_status_url="https://cc.example.com/s?cid=1",
         dial_action_url="https://cc.example.com/a?cid=1",
         dial_callback_url="https://cc.example.com/d?cid=1",
     )
     root = ET.fromstring(  # noqa: S314 - our own generated XML
         xml
     )
-    stream = root.find("Stream")
-    assert stream is not None
-    assert stream.text == "wss://cc.example.com/media?token=a&leg=agent"  # escaped in XML
-    assert stream.get("bidirectional") == "false"  # the AI never speaks
-    assert stream.get("audioTrack") == "both"
-    assert stream.get("keepCallAlive") == "false"
+    assert root.find("Stream") is None
+    assert root.find("Record") is None
     dial = root.find("Dial")
     assert dial is not None
     assert dial.get("callerId") == "+918000000000"
+    assert dial.get("callbackUrl") == "https://cc.example.com/d?cid=1"
     number = dial.find("Number")
     assert number is not None
     assert number.text == "+919876543210"
-    no_stream = ET.fromstring(  # noqa: S314 - our own generated XML
-        plivo.answer_xml(
-            customer_number="+91",
-            caller_id="+91",
-            stream_url=None,
-            stream_status_url="s",
-            dial_action_url="a",
-            dial_callback_url="d",
-        )
+
+
+async def test_plivo_start_stream_uses_the_audio_streams_api_listen_only() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        return httpx.Response(201, json={"stream_id": "s1"})
+
+    provider = plivo.PlivoTelephonyProvider(
+        plivo.PlivoCredentials("MAID", "tok", "+918000000000"),
+        integration_id="i1",
+        stream_enabled=True,
+        transport=httpx.MockTransport(handler),
     )
-    assert no_stream.find("Stream") is None
+    await provider.start_stream(
+        "uuid-1", service_url="wss://cc/media?token=t", status_callback_url="https://cc/s"
+    )
+    assert seen[0].method == "POST"
+    assert seen[0].url.path.endswith("/Account/MAID/Call/uuid-1/Stream/")
+    body = json.loads(seen[0].content)
+    assert body["bidirectional"] is False  # the AI never speaks
+    assert body["audio_track"] == "both"
+    assert body["content_type"] == "audio/x-mulaw;rate=8000"
+    assert body["service_url"] == "wss://cc/media?token=t"
+
+
+def test_plivo_dial_callback_identifies_the_call_by_a_leg_uuid() -> None:
+    cb = plivo.parse_callback("dial", {"DialALegUUID": "a-leg", "DialAction": "answer"})
+    assert cb.call_uuid == "a-leg"
+    assert cb.state is not None
+    assert cb.state.value == "CONNECTED"
 
 
 @pytest.mark.parametrize(

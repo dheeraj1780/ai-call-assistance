@@ -7,7 +7,7 @@ import { TEST_SESSION, fakeAuth, renderWithAuth } from "../test/renderWithAuth";
 
 const hook = vi.hoisted(() => ({ useLiveCall: vi.fn() }));
 vi.mock("../lib/useLiveCall", () => hook);
-const api = vi.hoisted(() => ({ simulate: vi.fn(), end: vi.fn(), start: vi.fn(), dismiss: vi.fn(), addNote: vi.fn(), reviewNote: vi.fn(), deleteNote: vi.fn(), snapshot: vi.fn() }));
+const api = vi.hoisted(() => ({ simulate: vi.fn(), end: vi.fn(), start: vi.fn(), dismiss: vi.fn(), addNote: vi.fn(), reviewNote: vi.fn(), deleteNote: vi.fn(), snapshot: vi.fn(), reopen: vi.fn(), editSegment: vi.fn() }));
 vi.mock("../lib/live", async (orig) => ({ ...(await orig<typeof import("../lib/live")>()), liveApi: api }));
 const { LiveCallPage } = await import("./LiveCallPage");
 
@@ -89,7 +89,88 @@ describe("LiveCallPage", () => {
     });
     renderWithAuth(<LiveCallPage />, { auth, path: "/calls/:id/live", url: "/calls/c1/live" });
     expect(screen.getByText(/Channel: Microsoft Teams/)).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("not stored after the call");
+    const notice = screen.getByLabelText("Data handling");
+    expect(notice).toHaveTextContent("Audio is never recorded");
+    expect(notice).toHaveTextContent("live-only");
+    expect(notice).toHaveTextContent("not saved after the call");
+  });
+
+  it("says audio is never recorded and text follows the retention policy for a normal call", () => {
+    const s = state();
+    hook.useLiveCall.mockReturnValue({
+      state: { ...s, transcript_persistence: "PERSISTED", text_retention_days: 30 },
+      error: null, connection: "live", reload: vi.fn(), patch: vi.fn(),
+    });
+    renderWithAuth(<LiveCallPage />, { auth, path: "/calls/:id/live", url: "/calls/c1/live" });
+    const notice = screen.getByLabelText("Data handling");
+    expect(notice).toHaveTextContent("Audio is never recorded");
+    expect(notice).toHaveTextContent("kept for 30 days");
+    expect(notice).not.toHaveTextContent("live-only");
+  });
+
+  it("shows an ending call with End disabled, and no second end request", async () => {
+    const s = state();
+    hook.useLiveCall.mockReturnValue({ state: { ...s, call: { ...s.call, status: "ENDING" } }, error: null, connection: "live", reload: vi.fn(), patch: vi.fn() });
+    renderWithAuth(<LiveCallPage />, { auth, path: "/calls/:id/live", url: "/calls/c1/live" });
+    const btn = screen.getByRole("button", { name: "Ending…" });
+    expect(btn).toBeDisabled();
+    await userEvent.click(btn);
+    expect(api.end).not.toHaveBeenCalled();
+  });
+
+  it("lets the user fix the details and retry a call that failed to start", async () => {
+    const s = state();
+    const reload = vi.fn().mockResolvedValue(undefined);
+    hook.useLiveCall.mockReturnValue({
+      state: { ...s, call: { ...s.call, status: "FAILED", started_at: null, ended_at: "x", telephony_error: "teams_provider_request_failed" } },
+      error: null, connection: "live", reload, patch: vi.fn(),
+    });
+    api.reopen.mockResolvedValue({});
+    renderWithAuth(<LiveCallPage />, { auth, path: "/calls/:id/live", url: "/calls/c1/live" });
+    expect(screen.getByRole("alert")).toHaveTextContent("did not connect");
+    expect(screen.getByRole("alert")).toHaveTextContent("Join the meeting now");
+    await userEvent.click(screen.getByRole("button", { name: "Fix details and retry" }));
+    await waitFor(() => expect(api.reopen).toHaveBeenCalledWith("c1"));
+  });
+
+  it("does not offer a retry for a call that was connected", () => {
+    const s = state();
+    hook.useLiveCall.mockReturnValue({
+      state: { ...s, call: { ...s.call, status: "COMPLETED", ended_at: "x" } },
+      error: null, connection: "live", reload: vi.fn(), patch: vi.fn(),
+    });
+    renderWithAuth(<LiveCallPage />, { auth, path: "/calls/:id/live", url: "/calls/c1/live" });
+    expect(screen.queryByRole("button", { name: "Fix details and retry" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View summary" })).toBeInTheDocument();
+  });
+
+  it("shows unattributed (mixed) speech honestly and lets a person correct a transcript line", async () => {
+    const s = state();
+    const patch = vi.fn();
+    hook.useLiveCall.mockReturnValue({
+      state: { ...s, transcript: [{ ...s.transcript[0], id: "u1", speaker: "UNKNOWN", text: "we need a quotation" }] },
+      error: null, connection: "live", reload: vi.fn(), patch,
+    });
+    api.editSegment.mockResolvedValue({ id: "u1", text: "we need a quotation today", edited: true, original_text: "we need a quotation" });
+    renderWithAuth(<LiveCallPage />, { auth, path: "/calls/:id/live", url: "/calls/c1/live" });
+    expect(screen.getByText("Speaker (not identified):")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Edit transcript line/ }));
+    const box = screen.getByLabelText("Edit transcript line");
+    await userEvent.clear(box);
+    await userEvent.type(box, "we need a quotation today");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.editSegment).toHaveBeenCalledWith("c1", "u1", "we need a quotation today"));
+    expect(patch).toHaveBeenCalled();
+  });
+
+  it("shows stakeholder notes", () => {
+    const s = state();
+    hook.useLiveCall.mockReturnValue({
+      state: { ...s, notes: [{ id: "n1", kind: "STAKEHOLDER", category: null, text: "owner's brother approves", confidence: 0.6, source: "DETERMINISTIC", status: "SUGGESTED", created_at: null, updated_at: null }] },
+      error: null, connection: "live", reload: vi.fn(), patch: vi.fn(),
+    });
+    renderWithAuth(<LiveCallPage />, { auth, path: "/calls/:id/live", url: "/calls/c1/live" });
+    expect(screen.getByText(/owner's brother approves/)).toBeInTheDocument();
   });
 
   it("labels phone calls", () => {

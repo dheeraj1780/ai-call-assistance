@@ -54,8 +54,9 @@ services:
       # Temporary: enables GET /health/client-ip to measure the proxy chain. Disable after.
       - key: DIAGNOSTICS_ENABLED
         value: "true"
-      # Staging only: no real telephony/STT provider is integrated yet (mock providers are
-      # clearly labelled in the product). Must be false/removed for a real production deploy.
+      # Staging only: lets the app start with mock AI/STT/telephony (clearly labelled in the
+      # product). Configure real providers (STT_PROVIDER=google, AI_PROVIDER, Plivo in Settings)
+      # and set this to false/remove it for a real production deploy.
       - key: ALLOW_MOCK_PROVIDERS_IN_PRODUCTION
         value: "true"
       - key: TELEPHONY_WEBHOOK_SECRET
